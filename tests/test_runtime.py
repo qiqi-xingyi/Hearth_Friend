@@ -30,16 +30,15 @@ def spoken(messages) -> list[str]:
 def test_a_reply_is_a_run_of_messages_not_one_block(store, persona):
     """How someone breaks up what they say is part of who they are, so a reply
     is several messages and each is recorded as its own turn."""
-    runtime = build(store, persona, StubProvider(["hey", "just got in", "you up?"]))
+    said = ["hey", "just got in", "still at the desk"]
+    runtime = build(store, persona, StubProvider(said))
     with runtime:
-        assert list(runtime.respond("are you there")) == ["hey", "just got in", "you up?"]
+        assert list(runtime.respond("are you there")) == said
 
     rows = store.conn.execute("SELECT role, content FROM turn ORDER BY id").fetchall()
     assert [(r["role"], r["content"]) for r in rows] == [
         ("user", "are you there"),
-        ("assistant", "hey"),
-        ("assistant", "just got in"),
-        ("assistant", "you up?"),
+        *[("assistant", m) for m in said],
     ]
 
 
