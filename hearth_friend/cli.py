@@ -80,7 +80,8 @@ def cmd_chat(config: Config) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    from prompt_toolkit import PromptSession
+    from prompt_toolkit import PromptSession, print_formatted_text
+    from prompt_toolkit.formatted_text import FormattedText
     from prompt_toolkit.patch_stdout import patch_stdout
 
     store = Store(config.db_path)
@@ -103,25 +104,41 @@ def cmd_chat(config: Config) -> int:
         temperature=config.temperature,
     )
 
-    speaker = _style(persona.name, BOLD)
     last_input = time.monotonic()
+    last_spoke = 0.0
     stop = threading.Event()
 
+    def say(message: str) -> None:
+        # Raw ANSI does not survive patch_stdout; prompt_toolkit has to do the
+        # styling or the escape codes end up on screen as text.
+        print_formatted_text(
+            FormattedText([("bold", persona.name), ("", f"  {message}")])
+        )
+
     def speaking() -> None:
+        nonlocal last_spoke
         while not stop.wait(0.2):
             if not runtime.unanswered():
                 continue
-            if time.monotonic() - last_input < config.settle_seconds:
+            # Wait out both: you may still be typing, and if she has only just
+            # finished talking she does not launch straight into another block.
+            # Without the second, anything you send while she is composing
+            # arrives to find the window already elapsed, and lands as a second
+            # burst stacked on the first.
+            quiet_since = max(last_input, last_spoke)
+            if time.monotonic() - quiet_since < config.settle_seconds:
                 continue
             try:
                 for index, message in enumerate(runtime.reply()):
                     if index:
                         time.sleep(persona.message_style.pause_seconds)
-                    print(f"{speaker}  {message}")
+                    say(message)
             except ProviderError as exc:
                 print(_style(f"[provider error: {exc}]", DIM), file=sys.stderr)
             except Exception as exc:  # keep the conversation alive
                 print(_style(f"[error: {exc}]", DIM), file=sys.stderr)
+            finally:
+                last_spoke = time.monotonic()
 
     session = PromptSession()
     with runtime:

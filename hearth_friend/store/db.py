@@ -166,14 +166,34 @@ class Store:
         return int(cur.lastrowid)
 
     def answered_through(self, user_id: str) -> int:
-        """The last message of yours she has actually read and answered."""
-        row = self.conn.execute(
+        """The last message of yours she has actually read and answered.
+
+        Recorded on her messages, but the column was added late and the turn log
+        cannot be rewritten, so rows from before it exists carry NULL. The
+        fallback reads the structure instead: anything you said before her last
+        message was, by construction, something she had already seen. Without
+        it, the first launch after the migration treats the entire history as
+        unanswered and she opens by replying to a week-old conversation.
+        """
+        recorded = self.conn.execute(
             "SELECT MAX(t.answers_through) AS n FROM turn t"
             "  JOIN session s ON s.id = t.session_id"
             " WHERE s.user_id = ? AND t.role = 'assistant'",
             (user_id,),
-        ).fetchone()
-        return int(row["n"] or 0)
+        ).fetchone()["n"]
+        # Confined to rows from before the column existed. Applying it more
+        # widely would be wrong in exactly the case the column was added for:
+        # something you send while she is composing lands before her reply, and
+        # is not something she saw.
+        implied = self.conn.execute(
+            "SELECT MAX(u.id) AS n FROM turn u JOIN session su ON su.id = u.session_id"
+            " WHERE su.user_id = ? AND u.role = 'user' AND u.id < ("
+            "   SELECT MAX(a.id) FROM turn a JOIN session sa ON sa.id = a.session_id"
+            "    WHERE sa.user_id = ? AND a.role = 'assistant'"
+            "      AND a.answers_through IS NULL)",
+            (user_id, user_id),
+        ).fetchone()["n"]
+        return max(int(recorded or 0), int(implied or 0))
 
     def unanswered_turns(self, user_id: str, limit: int) -> list[Turn]:
         """Your messages she has not got to yet, oldest first."""

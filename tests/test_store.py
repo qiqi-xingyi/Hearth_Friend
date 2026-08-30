@@ -109,3 +109,22 @@ def test_a_plain_file_copy_after_a_clean_close_is_also_complete(tmp_path):
     copied = Store(tmp_path / "copied.db")
     assert copied.stats()["turns"] == 1
     copied.close()
+
+
+def test_turns_from_before_the_column_existed_are_not_treated_as_unanswered(tmp_path):
+    """The column recording how far she had read was added late, and the turn
+    log cannot be rewritten, so older rows carry NULL. Read naively, the first
+    launch after that migration finds the whole history unanswered and she opens
+    by replying to a week-old conversation."""
+    store = Store(tmp_path / "hearth.db")
+    session_id = store.open_session("local", "cli")
+
+    # A conversation from before the column: strictly alternating, no record.
+    store.append_turn(session_id, "user", "old question")
+    store.append_turn(session_id, "assistant", "old answer")  # answers_through NULL
+
+    assert store.unanswered_turns("local", 40) == []
+
+    store.append_turn(session_id, "user", "something new")
+    assert [t.content for t in store.unanswered_turns("local", 40)] == ["something new"]
+    store.close()
