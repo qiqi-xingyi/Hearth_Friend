@@ -17,7 +17,11 @@ from __future__ import annotations
 
 from typing import Iterator, Sequence
 
-from hearth_friend.core.extraction import extract_self_facts
+from hearth_friend.core.curiosity import check as curiosity_check
+from hearth_friend.core.curiosity import (
+    as_prompt_block as curiosity_block,
+)
+from hearth_friend.core.extraction import extract_curiosity, extract_self_facts
 from hearth_friend.core.perception import Perception, perceive
 from hearth_friend.core.prompt import (
     reading_block,
@@ -35,6 +39,12 @@ from hearth_friend.core.state import State, after_perceiving, decayed, hours_sin
 from hearth_friend.providers.base import Message, ModelProvider, ProviderError
 from hearth_friend.store import Store, Turn
 from hearth_friend.world import Source, fetch_source
+
+
+# How much has to have happened before she comes away wanting to understand
+# something. Accumulated rather than scheduled, so a session where little was
+# said produces nothing. UNCALIBRATED.
+CURIOSITY_THRESHOLD = 1.2
 
 
 class Runtime:
@@ -117,8 +127,38 @@ class Runtime:
                     source_turn_id=said[-1].id,
                 )
                 added += 1
+        self._extract_curiosity(session_id)
         self.store.mark_extracted(session_id)
         return added
+
+    def _extract_curiosity(self, session_id: int) -> int:
+        """What she came away wanting to understand.
+
+        Fires on accumulated weight, not on every session: perception already
+        scores how much each thing mattered, so a conversation that was mostly
+        pleasantries leaves her with nothing to look into, which is right.
+        """
+        if self.store.session_salience(session_id) < CURIOSITY_THRESHOLD:
+            return 0
+
+        turns = self.store.session_turns(session_id)
+        transcript = [f"{t.role}: {t.content}" for t in turns]
+        private = [t.content for t in turns if t.role == "user"]
+        known = [row["question"] for row in self.store.open_curiosity(limit=20)]
+
+        kept = 0
+        for entry in extract_curiosity(self.provider, transcript, known):
+            if self.store.has_curiosity(entry["question"]):
+                continue
+            rejection = curiosity_check(entry["question"], private)
+            self.store.add_curiosity(
+                entry["question"],
+                entry["cues"],
+                source_turn_id=turns[-1].id if turns else None,
+                rejected_reason=rejection.reason if rejection else None,
+            )
+            kept += 0 if rejection else 1
+        return kept
 
     def catch_up_extraction(self, limit: int = 3) -> int:
         """Sessions that ended without being read, because the process died.
@@ -171,6 +211,11 @@ class Runtime:
         reading = reading_block(self.store.recent_reading())
         if reading:
             messages.append({"role": "system", "content": reading})
+        wondering = curiosity_block(
+            [row["question"] for row in self.store.open_curiosity()]
+        )
+        if wondering:
+            messages.append({"role": "system", "content": wondering})
         for turn in self.store.recent_turns(self.user_id, self.context_turns):
             messages.append({"role": turn.role, "content": turn.content})
         if remembered is not None:

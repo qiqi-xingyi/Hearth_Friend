@@ -76,3 +76,66 @@ def extract_self_facts(
         if len(out) >= MAX_NEW_PER_SESSION:
             break
     return out
+
+
+MAX_NEW_CURIOSITY = 2
+
+_CURIOSITY_INSTRUCTION = """下面是一段聊天记录。找出其中让"她"产生好奇、想去弄明白的东西。
+
+产出的必须是**关于世界的问题**，不是关于对方的事：
+  好： 量子计算为什么难
+  好： 为什么有人熬夜效率反而高
+  坏： 他的论文卡在哪                （关于对方）
+  坏： 面试搞砸了是什么感觉            （搬运原话）
+  坏： 字节跳动待遇怎么样              （对方的具体处境）
+
+想知道对方的事，直接问他就好，不用去查。所以这里只要"换个人来看也成立"的问题。
+
+每条给出：
+  question  一句话，不超过 20 个字，不含人名、公司名、数字、链接
+  cues      会让人想起这个问题的词，空格分隔
+
+宁可一条都不给，也不要为了凑数把对方的事写成问题。
+只输出 JSON：{"curious":[{"question":"...","cues":"..."}]}"""
+
+
+def extract_curiosity(
+    provider: ModelProvider, transcript: list[str], known: list[str]
+) -> list[dict]:
+    """What in this conversation left her wanting to understand something.
+
+    Separate from the self-fact call rather than folded into it: that one reads
+    only what she said, this one reads both sides, and mixing the inputs made
+    things the other person said come back as facts about her.
+    """
+    if not transcript:
+        return []
+
+    known_block = "\n".join(f"- {k}" for k in known) or "（还没有）"
+    messages: list[Message] = [
+        {"role": "system", "content": _CURIOSITY_INSTRUCTION},
+        {
+            "role": "user",
+            "content": (
+                f"【她已经在想的问题】\n{known_block}\n\n"
+                "【这段聊天】\n" + "\n".join(transcript)
+            ),
+        },
+    ]
+    try:
+        data = provider.structured_output(messages, temperature=0.3)
+    except (ProviderError, AttributeError):
+        return []
+
+    out: list[dict] = []
+    for entry in data.get("curious") or []:
+        if not isinstance(entry, dict):
+            continue
+        question = str(entry.get("question", "")).strip()
+        cues = str(entry.get("cues", "")).strip()
+        if not question or not cues:
+            continue
+        out.append({"question": question[:200], "cues": cues[:200]})
+        if len(out) >= MAX_NEW_CURIOSITY:
+            break
+    return out

@@ -279,6 +279,14 @@ class Store:
         ).fetchall()
         return [Turn(**dict(row)) for row in rows]
 
+    def session_turns(self, session_id: int) -> list[Turn]:
+        rows = self.conn.execute(
+            "SELECT id, session_id, role, content, created_at FROM turn"
+            " WHERE session_id = ? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+        return [Turn(**dict(row)) for row in rows]
+
     def unextracted_sessions(self, user_id: str) -> list[int]:
         """Finished sessions whose contents have not been folded back in yet."""
         rows = self.conn.execute(
@@ -293,6 +301,63 @@ class Store:
         self.conn.execute(
             "UPDATE session SET extracted_at = ? WHERE id = ?", (utcnow(), session_id)
         )
+
+    # ------------------------------------------------------------ curiosity
+
+    def session_salience(self, session_id: int) -> float:
+        """How much happened, by her reckoning.
+
+        Curiosity fires on accumulated weight rather than on a timer, so a
+        session where nothing much was said produces none.
+        """
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(p.salience), 0) AS total FROM perception p"
+            "  JOIN turn t ON t.id = p.turn_id"
+            " WHERE t.session_id = ?",
+            (session_id,),
+        ).fetchone()
+        return float(row["total"] or 0.0)
+
+    def add_curiosity(
+        self,
+        question: str,
+        cues: str,
+        *,
+        source_turn_id: int | None = None,
+        rejected_reason: str | None = None,
+    ) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO curiosity (question, cues, source_turn_id, created_at,"
+            "                       rejected_reason)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (question, cues, source_turn_id, utcnow(), rejected_reason),
+        )
+        return int(cur.lastrowid)
+
+    def open_curiosity(self, limit: int = 4) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT id, question, cues, created_at FROM curiosity"
+            " WHERE resolved_at IS NULL AND rejected_reason IS NULL"
+            " ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def rejected_curiosity(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Kept and readable. A guard whose effect you cannot see is one you
+        cannot tell is too tight."""
+        rows = self.conn.execute(
+            "SELECT id, question, rejected_reason, created_at FROM curiosity"
+            " WHERE rejected_reason IS NOT NULL ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def has_curiosity(self, question: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM curiosity WHERE question = ? LIMIT 1", (question,)
+        ).fetchone()
+        return row is not None
 
     # -------------------------------------------------------------- reading
 

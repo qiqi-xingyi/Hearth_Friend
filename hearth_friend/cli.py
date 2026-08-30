@@ -48,6 +48,22 @@ def cmd_status(config: Config) -> int:
     width = max(len(key) for key, _ in rows)
     for key, value in rows:
         print(f"{_style(key.ljust(width), DIM)}  {value}")
+
+    wondering = store.open_curiosity(limit=8)
+    if wondering:
+        print(_style("\nwondering about", DIM))
+        for row in wondering:
+            print(f"  {row['question']}")
+
+    # Shown because a guard whose effect you cannot see is one you cannot tell
+    # is too tight. These are questions that were not allowed out.
+    blocked = store.rejected_curiosity(limit=8)
+    if blocked:
+        print(_style("\nheld back", DIM))
+        for row in blocked:
+            print(f"  {row['question']}")
+            print(_style(f"    {row['rejected_reason']}", DIM))
+
     store.close()
     return 0
 

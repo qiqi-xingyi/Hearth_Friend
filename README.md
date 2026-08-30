@@ -55,7 +55,8 @@ rather than one block. Her messages can land while you are still typing.
 
 In-chat commands: `/exit`, `/quit`, `/status`.
 
-`hearth status` shows what is in the database:
+`hearth status` shows what is in the database, including what she has been
+meaning to understand and any question the guard would not let out:
 
 ```
 database  data/hearth.db (schema v1)
