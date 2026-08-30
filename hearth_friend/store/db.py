@@ -236,7 +236,31 @@ class Store:
             "first_turn_at": first,
         }
 
+    def backup(self, destination: Path | str) -> Path:
+        """Write a single self-contained copy, safe to run while in use.
+
+        This exists because copying the database file is not a backup. In WAL
+        mode recent writes live in a side file until a checkpoint, so `cp
+        hearth.db` can quietly produce an empty database — no error, nothing
+        missing until the day it is needed. SQLite's own backup API reads
+        through the WAL and produces one complete file.
+        """
+        dest = Path(destination)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        target = sqlite3.connect(str(dest))
+        try:
+            self.conn.backup(target)
+        finally:
+            target.close()
+        return dest
+
     def close(self) -> None:
+        # Fold the WAL back into the main file so that after a clean exit the
+        # one file really is the whole thing.
+        try:
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            pass
         self.conn.close()
 
     def __enter__(self) -> "Store":

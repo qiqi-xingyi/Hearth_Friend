@@ -49,6 +49,16 @@ def cmd_status(config: Config) -> int:
     return 0
 
 
+def cmd_backup(config: Config, destination: str) -> int:
+    store = Store(config.db_path)
+    path = store.backup(destination)
+    stats = store.stats()
+    store.close()
+    print(f"{path}  ({stats['turns']} turns, {path.stat().st_size} bytes)")
+    print(_style(f"copy {config.persona_path} as well: it is the other half.", DIM))
+    return 0
+
+
 def cmd_chat(config: Config) -> int:
     try:
         persona = Persona.load(config.persona_path)
@@ -128,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("chat", help="talk to her (default)")
     sub.add_parser("status", help="show what is in the database")
+    backup = sub.add_parser("backup", help="write a complete copy to a file")
+    backup.add_argument("destination", help="path to write the copy to")
     parser.set_defaults(command="chat")
 
     args = parser.parse_args(argv)
@@ -135,6 +147,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "status":
         return cmd_status(config)
+    if args.command == "backup":
+        return cmd_backup(config, args.destination)
     return cmd_chat(config)
 
 

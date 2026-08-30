@@ -106,8 +106,23 @@ environment variables always win over the file.
 
 ## Your data
 
-Everything is in one SQLite file plus your persona file. Copying those two is a
-complete backup; there is no cloud component and nothing to export from.
+Everything is in one SQLite file plus your persona file. There is no cloud
+component and nothing to export from.
+
+To take a copy:
+
+```bash
+hearth backup ~/hearth-2026-08-29.db
+```
+
+That writes one complete, self-contained file, and is safe to run while she is
+in use. Copy the persona file alongside it — it is the other half of her.
+
+A plain `cp` of `data/hearth.db` is only complete after a clean exit. The
+database runs in WAL mode, so recent writes live in `hearth.db-wal` until they
+are folded back in; copying the main file mid-session can silently produce an
+empty database. `hearth backup` reads through the WAL and does not have this
+problem.
 
 The `turn` table holds every message verbatim and is **append-only, enforced by
 database triggers** — updates and deletes are rejected at the storage layer.

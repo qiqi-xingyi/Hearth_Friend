@@ -76,3 +76,36 @@ def test_stats_counts_only_the_given_user(store):
 
     assert store.stats("local")["turns"] == 1
     assert store.stats()["turns"] == 2
+
+
+def test_backup_is_complete_on_its_own(tmp_path):
+    """Copying the database file is not a backup: in WAL mode the recent writes
+    are in a side file, and `cp hearth.db` can silently produce an empty
+    database. This is the check that the supported path does not."""
+    store = Store(tmp_path / "live.db")
+    session_id = store.open_session("local", "cli")
+    for index in range(20):
+        store.append_turn(session_id, "user", f"message {index}")
+
+    destination = store.backup(tmp_path / "out" / "copy.db")
+    store.close()
+
+    # Deliberately no -wal or -shm alongside it: the one file must be enough.
+    assert not (tmp_path / "out" / "copy.db-wal").exists()
+    restored = Store(destination)
+    assert restored.stats()["turns"] == 20
+    restored.close()
+
+
+def test_a_plain_file_copy_after_a_clean_close_is_also_complete(tmp_path):
+    import shutil
+
+    store = Store(tmp_path / "live.db")
+    session_id = store.open_session("local", "cli")
+    store.append_turn(session_id, "user", "hello")
+    store.close()  # checkpoints the WAL back into the main file
+
+    shutil.copyfile(tmp_path / "live.db", tmp_path / "copied.db")
+    copied = Store(tmp_path / "copied.db")
+    assert copied.stats()["turns"] == 1
+    copied.close()
