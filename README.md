@@ -80,6 +80,9 @@ persona:
                           # curiosity, expressiveness, baseline_mood
   message_style:          # how she breaks a reply into messages, and the
                           # pauses between them
+  self:                   # things that are true about her and stay true
+  reads:                  # feeds she reads; without a body this is where
+                          # anything she has to say comes from
   self_disclosure: |      # her stance when asked whether she is an AI
   boundaries:             # things she must never claim
     - ...

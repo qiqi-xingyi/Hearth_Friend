@@ -19,7 +19,12 @@ from typing import Iterator, Sequence
 
 from hearth_friend.core.extraction import extract_self_facts
 from hearth_friend.core.perception import Perception, perceive
-from hearth_friend.core.prompt import split_messages, state_note, system_prompt
+from hearth_friend.core.prompt import (
+    reading_block,
+    split_messages,
+    state_note,
+    system_prompt,
+)
 from hearth_friend.core.selfhood import (
     SelfFact,
     as_prompt_block,
@@ -29,6 +34,7 @@ from hearth_friend.core.selfhood import (
 from hearth_friend.core.state import State, after_perceiving, decayed, hours_since
 from hearth_friend.providers.base import Message, ModelProvider, ProviderError
 from hearth_friend.store import Store, Turn
+from hearth_friend.world import Source, fetch_source
 
 
 class Runtime:
@@ -159,6 +165,12 @@ class Runtime:
         messages: list[Message] = [
             {"role": "system", "content": system_prompt(self.persona)}
         ]
+        # Placed before the history rather than after it: what she has read
+        # changes daily, not per turn, so it stays part of the cacheable prefix
+        # for the whole of a conversation.
+        reading = reading_block(self.store.recent_reading())
+        if reading:
+            messages.append({"role": "system", "content": reading})
         for turn in self.store.recent_turns(self.user_id, self.context_turns):
             messages.append({"role": turn.role, "content": turn.content})
         if remembered is not None:
@@ -189,6 +201,33 @@ class Runtime:
         composing lands before her reply does, and she never saw it.
         """
         return self.store.unanswered_turns(self.user_id, self.context_turns)
+
+    # --------------------------------------------------------------- reading
+
+    def refresh_reading(self, max_age_hours: float = 6.0) -> int:
+        """Read the sources, if it has been a while. Returns items newly seen.
+
+        Failures are silent and bounded: a source being down means she has not
+        read it, which is a true statement, not an error to raise at you.
+        """
+        sources = getattr(self.persona, "reads", ())
+        if not sources:
+            return 0
+        # Explicitly, because "never" is not "just now": hours_since returns 0
+        # for a missing timestamp, which is right for state that has not drifted
+        # yet and exactly wrong here -- it meant she never read anything at all.
+        last = self.store.last_read_at()
+        if last is not None and hours_since(last) < max_age_hours:
+            return 0
+
+        seen = 0
+        for entry in sources:
+            for item in fetch_source(Source(entry["name"], entry["url"])):
+                if self.store.add_reading(
+                    entry["name"], item.url, item.title, item.summary, item.published
+                ):
+                    seen += 1
+        return seen
 
     # ---------------------------------------------------------------- feeling
 

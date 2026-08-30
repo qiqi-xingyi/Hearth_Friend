@@ -100,6 +100,7 @@ class Persona:
     traits: Traits = field(default_factory=Traits)
     message_style: MessageStyle = field(default_factory=MessageStyle)
     self_facts: tuple[dict, ...] = field(default_factory=tuple)
+    reads: tuple[dict, ...] = field(default_factory=tuple)
     source_path: Path | None = None
 
     @classmethod
@@ -136,6 +137,7 @@ class Persona:
             traits=Traits.from_dict(data.get("traits")),
             message_style=MessageStyle.from_dict(data.get("message_style")),
             self_facts=_read_self_facts(data.get("self"), path),
+            reads=_read_sources(data.get("reads"), path),
             source_path=path,
         )
 
@@ -158,4 +160,25 @@ def _read_self_facts(raw: object, path: Path) -> tuple[dict, ...]:
         if not cues or not statement:
             raise PersonaError(f"a 'self' entry needs both cues and say: {path}")
         out.append({"kind": kind, "cues": cues, "statement": statement})
+    return tuple(out)
+
+
+def _read_sources(raw: object, path: Path) -> tuple[dict, ...]:
+    """Where she reads. What someone reads is part of who they are, so it lives
+    with the rest of the persona rather than in configuration."""
+    if not raw:
+        return ()
+    if not isinstance(raw, list):
+        raise PersonaError(f"persona 'reads' must be a list: {path}")
+    out = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise PersonaError(f"each 'reads' entry must be a mapping: {path}")
+        name = str(entry.get("name", "")).strip()
+        url = str(entry.get("url", "")).strip()
+        if not name or not url:
+            raise PersonaError(f"a 'reads' entry needs both name and url: {path}")
+        if not url.startswith(("http://", "https://")):
+            raise PersonaError(f"'reads' url must be http(s): {url}")
+        out.append({"name": name, "url": url})
     return tuple(out)

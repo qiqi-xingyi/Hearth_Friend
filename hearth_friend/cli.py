@@ -18,6 +18,7 @@ from hearth_friend.core import Runtime
 from hearth_friend.persona import Persona, PersonaError
 from hearth_friend.providers import ProviderError, build_provider
 from hearth_friend.store import Store
+from hearth_friend.world.feeds import Unreachable
 
 DIM = "\033[2m"
 BOLD = "\033[1m"
@@ -119,6 +120,14 @@ def cmd_chat(config: Config) -> int:
         nonlocal last_spoke
         # Reading past sessions happens here rather than at startup, so a
         # backlog does not stand between you and saying hello.
+        try:
+            seen = runtime.refresh_reading()
+            if seen:
+                print(_style(f"[read {seen} new things]", DIM))
+        except Unreachable:
+            print(_style("[could not reach anything to read]", DIM))
+        except Exception:
+            pass
         try:
             learned = runtime.catch_up_extraction()
             if learned:

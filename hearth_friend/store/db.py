@@ -294,6 +294,32 @@ class Store:
             "UPDATE session SET extracted_at = ? WHERE id = ?", (utcnow(), session_id)
         )
 
+    # -------------------------------------------------------------- reading
+
+    def add_reading(
+        self, source: str, url: str, title: str, summary: str, published: str
+    ) -> bool:
+        """Record something she read. Returns False if she had already seen it."""
+        cur = self.conn.execute(
+            "INSERT OR IGNORE INTO reading (source, url, title, summary, published,"
+            "                               read_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (source, url, title, summary, published, utcnow()),
+        )
+        return cur.rowcount > 0
+
+    def recent_reading(self, limit: int = 12) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT source, url, title, summary, read_at FROM reading"
+            " ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def last_read_at(self) -> str | None:
+        row = self.conn.execute("SELECT MAX(read_at) AS t FROM reading").fetchone()
+        return row["t"]
+
     # ------------------------------------------------------------- selfhood
 
     def self_facts(self) -> list[dict[str, Any]]:
