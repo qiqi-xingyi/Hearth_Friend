@@ -31,6 +31,15 @@ def test_required_fields_are_checked(tmp_path):
 
 def test_boundaries_reach_the_prompt(persona):
     with_boundaries = Persona(
-        name=persona.name, core=persona.core, boundaries=("不编造经历",)
+        name=persona.name, core=persona.core, boundaries=("never invent experiences",)
     )
-    assert "不编造经历" in system_prompt(with_boundaries)
+    assert "never invent experiences" in system_prompt(with_boundaries)
+
+
+def test_chinese_persona_reaches_the_prompt(chinese_persona):
+    """Persona files are written in Chinese, so verify that text survives
+    prompt assembly rather than assuming it does."""
+    prompt = system_prompt(chinese_persona)
+    assert "二十六岁，住在杭州" in prompt
+    assert "短句，标点随意。" in prompt
+    assert "不编造经历" in prompt

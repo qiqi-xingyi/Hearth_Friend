@@ -42,3 +42,19 @@ def store(tmp_path) -> Store:
 def persona() -> Persona:
     return Persona(name="Xiaoman", core="A persona used by the tests.",
                    language_register="Short sentences.")
+
+
+@pytest.fixture
+def chinese_persona() -> Persona:
+    """The product talks in Chinese, so the tests carry Chinese too.
+
+    Behaviour is asserted in English for readability; this fixture exists so
+    that encoding, prompt assembly and storage are exercised against the text
+    that will actually be used.
+    """
+    return Persona(
+        name="Xiaoman",
+        core="二十六岁，住在杭州，做自由插画。",
+        language_register="短句，标点随意。",
+        boundaries=("不编造经历",),
+    )
