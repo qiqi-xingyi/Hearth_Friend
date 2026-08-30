@@ -27,11 +27,17 @@ from hearth_friend.core.extraction import (
     extract_pattern,
     extract_self_facts,
 )
+from hearth_friend.core.deciding import (
+    Parameters,
+    decide,
+    features_from,
+)
 from hearth_friend.core.floor import FLOOR_PROMPT, check_belief
 from hearth_friend.core.memory import Memory, cues_present
 from hearth_friend.core.memory import as_prompt_block as memory_block
 from hearth_friend.core.perception import Perception, perceive
 from hearth_friend.core.prompt import (
+    enforce,
     reading_block,
     split_messages,
     state_note,
@@ -82,6 +88,9 @@ class Runtime:
         self.temperature = temperature
         self.perceive_enabled = perceive_enabled
         self.embedding = embedding
+        # The personality, as the weights that make the choices. From the
+        # persona file, which is what a persona now is.
+        self.parameters = Parameters().merged(getattr(persona, "decides", {}))
         self.session_id: int | None = None
 
     # --------------------------------------------------------------- session
@@ -226,6 +235,7 @@ class Runtime:
         perception: Perception | None = None,
         remembered: list[SelfFact] | None = None,
         cue_text: str | None = None,
+        decision=None,
     ) -> list[Message]:
         """Stable persona, then history, then what she may do this turn.
 
@@ -262,10 +272,11 @@ class Runtime:
                     self.recall(cue_text, state), self.store.about_you()
                 ),
             })
-        if state is not None:
-            messages.append(
-                {"role": "system", "content": state_note(state, perception, self.persona)}
-            )
+        if decision is not None:
+            messages.append({
+                "role": "system",
+                "content": state_note(decision, perception, self.persona),
+            })
         return messages
 
     # ---------------------------------------------------------------- taking in
@@ -578,6 +589,30 @@ class Runtime:
         assert self.session_id is not None
 
         state, perception = self._register(pending)
+
+        # Decide before generating. What follows renders the decision; it does
+        # not make one.
+        quiet = hours_since(pending[0].created_at) / 24.0 if len(pending) > 1 else 0.0
+        features = features_from(
+            state,
+            perception,
+            self.store.relationship(self.user_id),
+            quiet,
+            sum(len(t.content) for t in pending),
+        )
+        decision = decide(self.parameters, features)
+        self.store.log_decision(
+            pending[-1].id,
+            features,
+            {
+                "speak": decision.speak,
+                "length": decision.length,
+                "ask": decision.ask,
+                "disclose": decision.disclose,
+                "push_back": decision.push_back,
+            },
+            decision.scores,
+        )
         # Recall is keyed on what is actually being talked about: the messages
         # she is answering plus a little of what came before them.
         cue_text = "\n".join(
@@ -587,14 +622,19 @@ class Runtime:
         remembered = self.remembered_self(cue_text)
         try:
             text = self.provider.generate(
-                self.build_messages(state, perception, remembered, cue_text),
+                self.build_messages(
+                    state, perception, remembered, cue_text, decision=decision
+                ),
                 temperature=self.temperature,
             )
         except ProviderError:
             raise
 
         answers_through = pending[-1].id
-        for message in split_messages(text, self.persona.message_style):
+        messages = enforce(
+            split_messages(text, self.persona.message_style), decision
+        )
+        for message in messages:
             self.store.append_turn(
                 self.session_id, "assistant", message, answers_through=answers_through
             )

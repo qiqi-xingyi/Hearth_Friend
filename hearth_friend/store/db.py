@@ -342,6 +342,70 @@ class Store:
         )
         return int(cur.lastrowid)
 
+    def log_decision(
+        self, turn_id: int | None, features: dict, decision: dict, scores: dict
+    ) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO decision_log (turn_id, features_json, decision_json,"
+            "                          scores_json, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (
+                turn_id,
+                json.dumps(features, ensure_ascii=False),
+                json.dumps(decision, ensure_ascii=False),
+                json.dumps(scores, ensure_ascii=False),
+                utcnow(),
+            ),
+        )
+        return int(cur.lastrowid)
+
+    def record_outcome(self, user_id: str) -> int:
+        """How he answered what she decided to say.
+
+        Derived from the turn log rather than asked for: the gap before his next
+        message and how much he wrote are the only reward signal available, and
+        they are already there.
+        """
+        rows = self.conn.execute(
+            "SELECT d.id, d.created_at,"
+            "       (SELECT t.created_at FROM turn t JOIN session s ON s.id = t.session_id"
+            "         WHERE s.user_id = ? AND t.role = 'user' AND t.created_at > d.created_at"
+            "         ORDER BY t.id LIMIT 1) AS replied_at,"
+            "       (SELECT LENGTH(t.content) FROM turn t JOIN session s ON s.id = t.session_id"
+            "         WHERE s.user_id = ? AND t.role = 'user' AND t.created_at > d.created_at"
+            "         ORDER BY t.id LIMIT 1) AS replied_len"
+            "  FROM decision_log d WHERE d.reply_delay_s IS NULL",
+            (user_id, user_id),
+        ).fetchall()
+        written = 0
+        for row in rows:
+            if not row["replied_at"]:
+                continue
+            self.conn.execute(
+                "UPDATE decision_log SET reply_delay_s = ?, reply_length = ?"
+                " WHERE id = ?",
+                (
+                    hours_between(row["created_at"]) * 3600
+                    - hours_between(row["replied_at"]) * 3600,
+                    row["replied_len"],
+                    row["id"],
+                ),
+            )
+            written += 1
+        return written
+
+    def relationship(self, user_id: str) -> dict[str, float]:
+        row = self.conn.execute(
+            "SELECT closeness, ease FROM relationship WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        if row is None:
+            self.conn.execute(
+                "INSERT INTO relationship (user_id, updated_at) VALUES (?, ?)",
+                (user_id, utcnow()),
+            )
+            return {"closeness": 0.3, "ease": 0.4}
+        return dict(row)
+
     def log_refusal(self, kind: str, text: str, reason: str) -> None:
         """Something the floor would not let become a belief. Recorded, because
         a guard whose effect cannot be seen cannot be corrected."""

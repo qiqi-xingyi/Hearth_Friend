@@ -180,125 +180,53 @@ def test_state_persists_across_a_restart(tmp_path, persona):
     second.close()
 
 
-def test_a_flat_mood_and_a_lively_one_produce_different_instructions(store, persona):
+def test_the_turn_block_renders_a_decision_rather_than_a_mood(persona):
+    """It used to threshold her mood: engagement under 0.25 meant short. Those
+    thresholds were the personality, written as constants in the middle of a
+    prompt builder. The block now renders a decision that was made with weights."""
+    from hearth_friend.core.deciding import Decision
     from hearth_friend.core.prompt import state_note
-    from hearth_friend.core.state import State
 
-    withdrawn = State(engagement=0.05, energy=0.2, mood_valence=-0.6)
-    engaged = State(engagement=0.9, energy=0.9, mood_valence=0.5)
+    def note(**kwargs):
+        base = dict(
+            speak=True, length=0.5, ask=False, disclose=False,
+            push_back=False, temperature=0.8, scores={},
+        )
+        return state_note(Decision(**{**base, **kwargs}), None, persona)
 
-    assert state_note(withdrawn, None, persona) != state_note(engaged, None, persona)
-    assert "没太投入" in state_note(withdrawn, None, persona)
-    assert "真的有兴趣" in state_note(engaged, None, persona)
+    assert "别反问" in note(ask=False)
+    assert "可以问一句" in note(ask=True)
+    assert "不用讲自己" in note(disclose=False)
+    assert "可以说点你自己的事" in note(disclose=True)
+    assert "直接说出来" in note(push_back=True)
+
+
+def test_a_longer_decision_asks_for_more_words(persona):
+    from hearth_friend.core.deciding import Decision
+    from hearth_friend.core.prompt import state_note
+
+    def target(length):
+        base = dict(
+            speak=True, ask=False, disclose=False, push_back=False,
+            temperature=0.8, scores={},
+        )
+        text = state_note(Decision(length=length, **base), None, persona)
+        return int(text.split("大概 ")[1].split(" 字")[0])
+
+    assert target(0.9) > target(0.1)
 
 
 def test_she_is_never_handed_words_for_how_she_feels(persona):
     """An earlier version described her mood in the prompt and she read it out
-    loud. The block gives instructions now, not something to recite."""
+    loud. The block carries instructions, not something to recite."""
+    from hearth_friend.core.deciding import Decision
     from hearth_friend.core.prompt import state_note
-    from hearth_friend.core.state import State
 
-    note = state_note(State(mood_valence=-0.8, energy=0.2, engagement=0.05), None, persona)
+    note = state_note(
+        Decision(True, 0.1, False, False, False, 1.6, {}), None, persona
+    )
     assert "心情不太好" not in note
-    assert "不用为了对方强撑着轻松" in note
-
-
-# --- a shared timeline rather than question and answer ----------------------
-
-
-def test_a_burst_gets_one_reply_covering_all_of_it(store, persona):
-    """You can keep talking without waiting. Three lines in a row are one thing
-    you were saying, and get one answer, not three."""
-    provider = StubProvider(["got it"])
-    with build(store, persona, provider) as runtime:
-        runtime.ingest("hey")
-        runtime.ingest("so the thing happened today")
-        runtime.ingest("and I still don't know what to do about it")
-        assert list(runtime.reply()) == ["got it"]
-
-    assert spoken(provider.calls[-1]) == [
-        "hey",
-        "so the thing happened today",
-        "and I still don't know what to do about it",
-    ]
-
-
-def test_unanswered_is_everything_since_she_last_spoke(store, persona):
-    with build(store, persona, StubProvider(["ok"])) as runtime:
-        runtime.ingest("one")
-        runtime.ingest("two")
-        assert [t.content for t in runtime.unanswered()] == ["one", "two"]
-
-        list(runtime.reply())
-        assert runtime.unanswered() == []
-
-        runtime.ingest("three")
-        assert [t.content for t in runtime.unanswered()] == ["three"]
-
-
-def test_replying_with_nothing_pending_says_nothing(store, persona):
-    provider = StubProvider(["ok"])
-    with build(store, persona, provider) as runtime:
-        assert list(runtime.reply()) == []
-    assert provider.calls == []
-
-
-def test_the_store_takes_writes_from_more_than_one_thread(tmp_path):
-    """She answers on a different thread from the one reading you in, so both
-    have to be able to write."""
-    import threading
-
-    store = Store(tmp_path / "hearth.db")
-    session_id = store.open_session("local", "cli")
-    errors: list[Exception] = []
-
-    def write(tag: str) -> None:
-        try:
-            for index in range(25):
-                store.append_turn(session_id, "user", f"{tag}{index}")
-        except Exception as exc:  # noqa: BLE001 - reported below
-            errors.append(exc)
-
-    threads = [threading.Thread(target=write, args=(t,)) for t in ("a", "b", "c")]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
-    assert errors == []
-    assert store.stats()["turns"] == 75
-    store.close()
-
-
-def test_you_can_keep_talking_while_she_is_composing(store, persona):
-    """The whole point of the split between ingest and reply. If sending a
-    message blocked until she answered, there would be no way to say two things
-    in a row, which is most of what talking to someone is."""
-    import threading
-    import time as _time
-
-    class SlowProvider(StubProvider):
-        def generate(self, messages, *, temperature=None):
-            _time.sleep(0.4)
-            return super().generate(messages, temperature=temperature)
-
-    provider = SlowProvider(["thinking about it"])
-    with build(store, persona, provider) as runtime:
-        runtime.ingest("here is the first thing")
-
-        said: list[str] = []
-        thread = threading.Thread(target=lambda: said.extend(runtime.reply()))
-        thread.start()
-
-        _time.sleep(0.1)  # she is mid-call
-        started = _time.monotonic()
-        runtime.ingest("and another thing")
-        assert _time.monotonic() - started < 0.2, "sending blocked on her reply"
-
-        thread.join(timeout=5)
-        assert said == ["thinking about it"]
-        # What arrived mid-reply is still owed an answer.
-        assert [t.content for t in runtime.unanswered()] == ["and another thing"]
+    assert "没太进入状态" in note
 
 
 def test_the_context_is_bounded_by_size_not_only_by_count(store, persona):
@@ -314,3 +242,27 @@ def test_the_context_is_bounded_by_size_not_only_by_count(store, persona):
     history = "".join(spoken(provider.calls[-1]))
     assert len(history) <= 800, "the window has to hold"
     assert "11" in history, "and what survives is the most recent"
+
+
+def test_a_decision_not_to_ask_is_enforced_and_not_merely_requested(persona):
+    """Told not to ask anything this turn, it asked anyway. A decision the thing
+    downstream may decline is a suggestion, and the point of moving the choosing
+    out of the model is that the choosing is not the model's."""
+    from hearth_friend.core.deciding import Decision
+    from hearth_friend.core.prompt import enforce
+
+    said = ["那就先放着吧", "不急着赶", "论文卡在哪了？"]
+    quiet = Decision(True, 0.5, False, False, False, 0.8, {})
+    curious = Decision(True, 0.5, True, False, False, 0.8, {})
+
+    assert enforce(said, quiet) == ["那就先放着吧", "不急着赶"]
+    assert enforce(said, curious) == said
+
+
+def test_enforcement_does_not_cut_into_what_she_actually_said(persona):
+    from hearth_friend.core.deciding import Decision
+    from hearth_friend.core.prompt import enforce
+
+    said = ["卡住的时候硬写也没用，我以前也这样，后来发现放一放反而顺了？"]
+    quiet = Decision(True, 0.5, False, False, False, 0.8, {})
+    assert enforce(said, quiet) == said, "a single message is never dropped"

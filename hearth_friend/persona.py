@@ -103,6 +103,7 @@ class Persona:
     message_style: MessageStyle = field(default_factory=MessageStyle)
     self_facts: tuple[dict, ...] = field(default_factory=tuple)
     reads: tuple[dict, ...] = field(default_factory=tuple)
+    decides: dict = field(default_factory=dict)
     source_path: Path | None = None
 
     @classmethod
@@ -140,6 +141,7 @@ class Persona:
             message_style=MessageStyle.from_dict(data.get("message_style")),
             self_facts=_read_self_facts(data.get("self"), path),
             reads=_read_sources(data.get("reads"), path),
+            decides=data.get("decides") or {},
             source_path=path,
         )
 
