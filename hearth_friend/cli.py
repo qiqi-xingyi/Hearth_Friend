@@ -17,6 +17,7 @@ from hearth_friend.config import Config
 from hearth_friend.core import Runtime
 from hearth_friend.persona import Persona, PersonaError
 from hearth_friend.providers import ProviderError, build_provider
+from hearth_friend.providers.embedding import build_embedding
 from hearth_friend.store import Store
 from hearth_friend.world.feeds import Unreachable
 
@@ -119,6 +120,7 @@ def cmd_chat(config: Config) -> int:
         channel=config.channel,
         context_turns=config.context_turns,
         temperature=config.temperature,
+        embedding=build_embedding(config),
     )
 
     last_input = time.monotonic()
@@ -136,6 +138,17 @@ def cmd_chat(config: Config) -> int:
         nonlocal last_spoke
         # Reading past sessions happens here rather than at startup, so a
         # backlog does not stand between you and saying hello.
+        # Loading the embedding model takes tens of seconds, so it warms here
+        # rather than in front of the first thing you say.
+        if runtime.embedding is not None:
+            try:
+                runtime.embedding.load()
+                vectorised = runtime.catch_up_embeddings()
+                if vectorised:
+                    print(_style(f"[took in {vectorised} things]", DIM))
+            except Exception as exc:
+                print(_style(f"[no embedding model: {exc}]", DIM))
+                runtime.embedding = None
         try:
             seen = runtime.refresh_reading()
             if seen:
@@ -146,6 +159,7 @@ def cmd_chat(config: Config) -> int:
             pass
         try:
             learned = runtime.catch_up_extraction()
+            runtime.catch_up_embeddings()
             if learned:
                 print(_style(f"[settled {learned} more things about herself]", DIM))
         except Exception:

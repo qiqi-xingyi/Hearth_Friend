@@ -35,7 +35,9 @@ from hearth_friend.core.selfhood import (
     parse_cues,
     recall,
 )
+from hearth_friend.core.attention import attend, temperature_for
 from hearth_friend.core.state import State, after_perceiving, decayed, hours_since
+from hearth_friend.providers.embedding import pack, unpack
 from hearth_friend.providers.base import Message, ModelProvider, ProviderError
 from hearth_friend.store import Store, Turn
 from hearth_friend.world import Source, fetch_source
@@ -59,6 +61,7 @@ class Runtime:
         context_turns: int = 40,
         temperature: float | None = None,
         perceive_enabled: bool = True,
+        embedding=None,
     ):
         self.store = store
         self.provider = provider
@@ -68,6 +71,7 @@ class Runtime:
         self.context_turns = context_turns
         self.temperature = temperature
         self.perceive_enabled = perceive_enabled
+        self.embedding = embedding
         self.session_id: int | None = None
 
     # --------------------------------------------------------------- session
@@ -195,6 +199,7 @@ class Runtime:
         state: State | None = None,
         perception: Perception | None = None,
         remembered: list[SelfFact] | None = None,
+        cue_text: str | None = None,
     ) -> list[Message]:
         """Stable persona, then history, then what she may do this turn.
 
@@ -208,7 +213,11 @@ class Runtime:
         # Placed before the history rather than after it: what she has read
         # changes daily, not per turn, so it stays part of the cacheable prefix
         # for the whole of a conversation.
-        reading = reading_block(self.store.recent_reading())
+        reading = reading_block(
+            self.attended_reading(cue_text, state)
+            if state is not None and cue_text is not None
+            else self.store.recent_reading()
+        )
         if reading:
             messages.append({"role": "system", "content": reading})
         wondering = curiosity_block(
@@ -274,6 +283,55 @@ class Runtime:
                 ):
                     seen += 1
         return seen
+
+    # ------------------------------------------------------------- attention
+
+    def catch_up_embeddings(self, limit: int = 200) -> int:
+        """Vectorise anything new. Off the reply path; loading the model alone
+        takes tens of seconds."""
+        if self.embedding is None:
+            return 0
+        model = self.embedding.model_id
+        done = 0
+        for table in ("reading", "curiosity"):
+            rows = self.store.rows_needing_embedding(table, model, limit)
+            if not rows:
+                continue
+            vectors = self.embedding.embed([row["text"] for row in rows])
+            for row, vector in zip(rows, vectors):
+                self.store.set_embedding(table, row["id"], pack(vector), model)
+                done += 1
+        return done
+
+    def attended_reading(self, cue_text: str, state: State, k: int = 10) -> list[dict]:
+        """What of her reading this moment brings to mind.
+
+        Falls back to an even sample across sources when there is no embedding
+        model, which is a working system rather than a degraded one.
+        """
+        if self.embedding is None or not cue_text.strip():
+            return self.store.recent_reading(limit=k)
+
+        candidates = self.store.embedded_reading(self.embedding.model_id)
+        if len(candidates) < 2:
+            return self.store.recent_reading(limit=k)
+
+        wondering = " ".join(
+            row["question"] for row in self.store.open_curiosity(limit=4)
+        )
+        # Her own open questions bias what she notices, which is the loop: what
+        # she attends to becomes what she wonders about, and what she wonders
+        # about changes what she attends to.
+        query_text = cue_text if not wondering else f"{cue_text}\n{wondering}"
+        query = self.embedding.embed([query_text])[0]
+
+        picked = attend(
+            query,
+            [unpack(row["embedding"]) for row in candidates],
+            k=k,
+            temperature=temperature_for(state.engagement, state.energy),
+        )
+        return [candidates[i] for i in picked]
 
     # ---------------------------------------------------------------- feeling
 
@@ -343,7 +401,7 @@ class Runtime:
         remembered = self.remembered_self(cue_text)
         try:
             text = self.provider.generate(
-                self.build_messages(state, perception, remembered),
+                self.build_messages(state, perception, remembered, cue_text),
                 temperature=self.temperature,
             )
         except ProviderError:

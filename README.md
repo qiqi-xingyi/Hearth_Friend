@@ -20,6 +20,10 @@ speaks through whichever OpenAI-compatible model you point her at.
 
 Requires Python 3.10+ and an API key for any OpenAI-compatible chat endpoint.
 
+An embedding model runs locally so that memories are never sent anywhere to be
+vectorised. It downloads on first run; set `HEARTH_EMBEDDING_MODEL=off` to skip
+it and fall back to keyword matching.
+
 ```bash
 git clone <this repo> && cd hearth-friend
 conda env create -f environment.yml
@@ -114,6 +118,7 @@ environment variables always win over the file.
 | `HEARTH_CONTEXT_TURNS` | `40` | past turns replayed as context |
 | `HEARTH_SETTLE_SECONDS` | `2.0` | how long she waits for you to finish |
 | `HEARTH_TEMPERATURE` | `1.0` | |
+| `HEARTH_EMBEDDING_MODEL` | `BAAI/bge-m3` | local; `off` falls back to keyword matching |
 | `HEARTH_USER_ID` | `local` | history is keyed by this, not by persona |
 | `HEARTH_REQUEST_TIMEOUT` | `60` | seconds |
 

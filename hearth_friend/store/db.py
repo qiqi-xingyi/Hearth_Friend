@@ -302,6 +302,45 @@ class Store:
             "UPDATE session SET extracted_at = ? WHERE id = ?", (utcnow(), session_id)
         )
 
+    # ------------------------------------------------------------- vectors
+
+    def set_embedding(self, table: str, row_id: int, blob: bytes, model: str) -> None:
+        if table not in ("reading", "curiosity"):
+            raise ValueError(f"no embeddings on {table!r}")
+        self.conn.execute(
+            f"UPDATE {table} SET embedding = ?, embedding_model = ? WHERE id = ?",
+            (blob, model, row_id),
+        )
+
+    def rows_needing_embedding(
+        self, table: str, model: str, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """Rows with no vector, or one made by a different model.
+
+        The second case is why the model is recorded per row: changing it
+        invalidates every vector, and there is otherwise no way to recompute
+        only what needs it.
+        """
+        if table not in ("reading", "curiosity"):
+            raise ValueError(f"no embeddings on {table!r}")
+        text = "title || ' ' || COALESCE(summary, '')" if table == "reading" else "question"
+        rows = self.conn.execute(
+            f"SELECT id, {text} AS text FROM {table}"
+            " WHERE embedding IS NULL OR embedding_model IS NOT ?"
+            " ORDER BY id DESC LIMIT ?",
+            (model, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def embedded_reading(self, model: str, limit: int = 60) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT source, url, title, summary, read_at, embedding FROM reading"
+            " WHERE embedding IS NOT NULL AND embedding_model = ?"
+            " ORDER BY id DESC LIMIT ?",
+            (model, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     # ------------------------------------------------------------ curiosity
 
     def session_salience(self, session_id: int) -> float:

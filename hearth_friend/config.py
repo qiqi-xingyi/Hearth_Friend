@@ -51,6 +51,7 @@ class Config:
     context_turns: int
     request_timeout: float
     settle_seconds: float
+    embedding_model: str
 
     @classmethod
     def from_env(cls, *, load_dotenv: bool = True) -> "Config":
@@ -74,4 +75,7 @@ class Config:
             # How long she waits after you stop typing before answering, so that
             # sending three lines in a row gets one reply rather than three.
             settle_seconds=float(_get("SETTLE_SECONDS", "2.0")),
+            # Local, because an embedding call carries the text itself. "off"
+            # falls back to keyword matching, which is a working system.
+            embedding_model=_get("EMBEDDING_MODEL", "BAAI/bge-m3"),
         )
