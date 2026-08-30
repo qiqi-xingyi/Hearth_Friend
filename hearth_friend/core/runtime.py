@@ -27,6 +27,7 @@ from hearth_friend.core.extraction import (
     extract_pattern,
     extract_self_facts,
 )
+from hearth_friend.core.floor import FLOOR_PROMPT, check_belief
 from hearth_friend.core.memory import Memory, cues_present
 from hearth_friend.core.memory import as_prompt_block as memory_block
 from hearth_friend.core.perception import Perception, perceive
@@ -135,6 +136,10 @@ class Runtime:
 
         added = 0
         for entry in found:
+            refused = check_belief(entry["say"])
+            if refused:
+                self.store.log_refusal("self_fact", entry["say"], refused)
+                continue
             if not self.store.has_self_statement(entry["say"]):
                 self.store.add_self_fact(
                     entry["kind"],
@@ -411,6 +416,10 @@ class Runtime:
             pattern = extract_pattern(self.provider, cue, episodes)
             if not pattern:
                 continue
+            refused = check_belief(pattern)
+            if refused:
+                self.store.log_refusal("pattern", pattern, refused)
+                continue
             self.store.add_about_you(
                 "pattern", cue, pattern, source_memory_ids=fresh
             )
@@ -437,6 +446,10 @@ class Runtime:
 
         added = 0
         for entry in found["about_you"]:
+            refused = check_belief(entry["statement"])
+            if refused:
+                self.store.log_refusal("about_you", entry["statement"], refused)
+                continue
             if not self.store.has_about_you(entry["statement"]):
                 self.store.add_about_you(
                     entry["kind"],

@@ -342,6 +342,24 @@ class Store:
         )
         return int(cur.lastrowid)
 
+    def log_refusal(self, kind: str, text: str, reason: str) -> None:
+        """Something the floor would not let become a belief. Recorded, because
+        a guard whose effect cannot be seen cannot be corrected."""
+        self.conn.execute(
+            "INSERT INTO state_change_log (target, key, old_value, new_value,"
+            "                              reason, evidence_json, job, created_at)"
+            " VALUES ('refused', ?, 0, 0, ?, ?, 'floor', ?)",
+            (kind, reason, json.dumps({"text": text}, ensure_ascii=False), utcnow()),
+        )
+
+    def refusals(self, limit: int = 20) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT key, reason, evidence_json, created_at FROM state_change_log"
+            " WHERE target = 'refused' ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def patterns(self) -> list[dict[str, Any]]:
         """What she has concluded, with what she concluded it from."""
         rows = self.conn.execute(

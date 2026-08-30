@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 
+from hearth_friend.core.floor import FLOOR_PROMPT
 from hearth_friend.core.perception import Perception
 from hearth_friend.core.state import State
 from hearth_friend.persona import MessageStyle, Persona
@@ -31,7 +32,8 @@ _FRAMEWORK_RULES = """【底层规则】
 
 
 def system_prompt(persona: Persona) -> str:
-    blocks: list[str] = [f"你是{persona.name}。", persona.core]
+    # First, and not from the persona file: a floor a file can edit is not one.
+    blocks: list[str] = [FLOOR_PROMPT, f"你是{persona.name}。", persona.core]
 
     if persona.language_register:
         blocks.append(f"【说话方式】\n{persona.language_register}")
