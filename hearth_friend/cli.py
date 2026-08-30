@@ -175,6 +175,11 @@ def cmd_chat(config: Config) -> int:
         except Exception:
             pass
         try:
+            runtime.store.drop_stale_threads()
+            runtime.store.record_outcome(config.user_id)
+        except Exception:
+            pass
+        try:
             gone, back = runtime.let_time_pass()
             if gone or back:
                 note(f"[{gone} things faded, {back} came back]")

@@ -342,6 +342,76 @@ class Store:
         )
         return int(cur.lastrowid)
 
+    def add_thread(
+        self,
+        what: str,
+        cues: str,
+        *,
+        due_at: str | None = None,
+        source_turn_id: int | None = None,
+    ) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO thread (what, cues, opened_at, due_at, source_turn_id,"
+            "                    created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (what, cues, utcnow(), due_at, source_turn_id, utcnow()),
+        )
+        return int(cur.lastrowid)
+
+    def open_threads(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT id, what, cues, due_at, status FROM thread"
+            " WHERE status = 'open' ORDER BY due_at IS NULL, due_at"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def has_thread(self, what: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM thread WHERE what = ? AND status != 'closed' LIMIT 1",
+            (what,),
+        ).fetchone()
+        return row is not None
+
+    def mark_asked(self, thread_ids: list[int]) -> None:
+        """She asked. A friend asks once and then waits."""
+        if not thread_ids:
+            return
+        marks = ",".join("?" * len(thread_ids))
+        self.conn.execute(
+            f"UPDATE thread SET status = 'asked', asked_at = ?"
+            f" WHERE id IN ({marks}) AND status = 'open'",
+            (utcnow(), *thread_ids),
+        )
+
+    def close_thread(self, thread_id: int, outcome: str) -> None:
+        self.conn.execute(
+            "UPDATE thread SET status = 'closed', closed_at = ?, outcome = ?"
+            " WHERE id = ?",
+            (utcnow(), outcome[:300], thread_id),
+        )
+
+    def drop_stale_threads(self) -> int:
+        """Let go of what was asked about and never answered, and of what went
+        far enough past its date that raising it would be strange."""
+        from hearth_friend.core.threads import GIVE_UP_AFTER_DAYS, STALE_AFTER_DAYS
+
+        dropped = 0
+        for row in self.conn.execute(
+            "SELECT id, due_at, asked_at, status FROM thread"
+            " WHERE status IN ('open', 'asked')"
+        ).fetchall():
+            stale = row["due_at"] and hours_between(row["due_at"]) > STALE_AFTER_DAYS * 24
+            unanswered = (
+                row["asked_at"]
+                and hours_between(row["asked_at"]) > GIVE_UP_AFTER_DAYS * 24
+            )
+            if stale or unanswered:
+                self.conn.execute(
+                    "UPDATE thread SET status = 'dropped' WHERE id = ?", (row["id"],)
+                )
+                dropped += 1
+        return dropped
+
     def log_decision(
         self, turn_id: int | None, features: dict, decision: dict, scores: dict
     ) -> int:

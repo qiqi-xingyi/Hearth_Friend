@@ -13,6 +13,7 @@ One cheap call per session, over what she said. Not on the path of any reply.
 from __future__ import annotations
 
 import json
+import re
 
 from hearth_friend.providers.base import Message, ModelProvider, ProviderError
 
@@ -281,3 +282,67 @@ def extract_pattern(provider: ModelProvider, cue: str, episodes: list[str]) -> s
         return None
     pattern = pattern.strip()
     return pattern[:120] if 4 <= len(pattern) <= 120 else None
+
+
+MAX_NEW_THREADS = 3
+
+_THREAD_INSTRUCTION = """下面是一段聊天记录。找出**他提到的、还没有结果的事**。
+
+要的是有时间性的、之后会有个结果的事：
+  好： 他下周三面试            → due 那天
+  好： 他这周要交论文初稿       → due 本周末
+  好： 他明天要去看病           → due 明天
+  坏： 他在读博士              （是长期状态，不是一件会有结果的事）
+  坏： 他喜欢打游戏             （是偏好）
+  坏： 他今天很累               （已经发生完了）
+
+每条给出：
+  what  一句话，用「他……」开头，说清楚是什么事
+  cues  会让人想起这件事的词，空格分隔
+  due   预计有结果的日期，YYYY-MM-DD。他说得含糊就估一个合理的；
+        实在无从估计就给 null
+
+聊天记录里「他：」是对方说的，「你：」是你自己说的。只看他的。
+没有就返回空列表，多数闲聊里本来就没有。
+只输出 JSON：{"threads":[{"what":"...","cues":"...","due":"YYYY-MM-DD"}]}"""
+
+
+def extract_threads(
+    provider: ModelProvider, transcript: list[str], today: str, known: list[str]
+) -> list[dict]:
+    """What he mentioned that will have happened by some point."""
+    if not transcript:
+        return []
+
+    known_block = "\n".join(f"- {k}" for k in known) or "（还没有）"
+    messages: list[Message] = [
+        {"role": "system", "content": _THREAD_INSTRUCTION},
+        {
+            "role": "user",
+            "content": (
+                f"【今天是】{today}\n\n【已经记着的】\n{known_block}\n\n"
+                "【这段聊天】\n" + "\n".join(transcript)
+            ),
+        },
+    ]
+    try:
+        data = provider.structured_output(messages, temperature=0.2)
+    except (ProviderError, AttributeError):
+        return []
+
+    out: list[dict] = []
+    for entry in data.get("threads") or []:
+        if not isinstance(entry, dict):
+            continue
+        what = str(entry.get("what", "")).strip()
+        cues = str(entry.get("cues", "")).strip()
+        if not what or not cues:
+            continue
+        due = entry.get("due")
+        due = str(due).strip() if isinstance(due, str) and str(due).strip() else None
+        if due and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", due):
+            due = None
+        out.append({"what": what[:200], "cues": cues[:200], "due": due})
+        if len(out) >= MAX_NEW_THREADS:
+            break
+    return out

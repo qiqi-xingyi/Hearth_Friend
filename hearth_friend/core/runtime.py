@@ -23,6 +23,7 @@ from hearth_friend.core.curiosity import (
 )
 from hearth_friend.core.extraction import (
     extract_curiosity,
+    extract_threads,
     extract_memories,
     extract_pattern,
     extract_self_facts,
@@ -34,6 +35,8 @@ from hearth_friend.core.deciding import (
 )
 from hearth_friend.core.floor import FLOOR_PROMPT, check_belief
 from hearth_friend.core.memory import Memory, cues_present
+from hearth_friend.core.threads import Thread, due_now
+from hearth_friend.core.threads import as_prompt_block as thread_block
 from hearth_friend.core.memory import as_prompt_block as memory_block
 from hearth_friend.core.perception import Perception, perceive
 from hearth_friend.core.prompt import (
@@ -158,8 +161,37 @@ class Runtime:
                 )
                 added += 1
         self._extract_memories(session_id)
+        self._extract_threads(session_id)
         self._extract_curiosity(session_id)
         self.store.mark_extracted(session_id)
+        return added
+
+    def _extract_threads(self, session_id: int) -> int:
+        """What he said he had coming."""
+        from datetime import datetime, timezone
+
+        turns = self.store.session_turns(session_id)
+        if sum(len(t.content) for t in turns) < 15:
+            return 0
+
+        transcript = [
+            f"{'他' if t.role == 'user' else '你'}：{t.content}" for t in turns
+        ]
+        known = [row["what"] for row in self.store.open_threads()]
+        today = datetime.now(timezone.utc).date().isoformat()
+
+        added = 0
+        for entry in extract_threads(self.provider, transcript, today, known):
+            if self.store.has_thread(entry["what"]):
+                continue
+            due = f"{entry['due']}T12:00:00+00:00" if entry["due"] else None
+            self.store.add_thread(
+                entry["what"],
+                entry["cues"],
+                due_at=due,
+                source_turn_id=turns[-1].id,
+            )
+            added += 1
         return added
 
     def _extract_curiosity(self, session_id: int) -> int:
@@ -263,6 +295,13 @@ class Runtime:
             messages.append({"role": "system", "content": wondering})
         for turn in self.recent_within_budget():
             messages.append({"role": turn.role, "content": turn.content})
+        threads = [
+            Thread(r["id"], r["what"], r["cues"], r["due_at"], r["status"])
+            for r in self.store.open_threads()
+        ]
+        pending = thread_block(threads)
+        if pending:
+            messages.append({"role": "system", "content": pending})
         if remembered is not None:
             messages.append({"role": "system", "content": as_prompt_block(remembered)})
         if state is not None and cue_text is not None:
@@ -629,6 +668,17 @@ class Runtime:
             )
         except ProviderError:
             raise
+
+        # If she raised something that had come due, it counts as asked. A
+        # friend asks once and then waits for an answer.
+        spoken = text
+        raised = [
+            row["id"]
+            for row in self.store.open_threads()
+            if due_now(row["due_at"])
+            and any(cue and cue in spoken for cue in row["cues"].split())
+        ]
+        self.store.mark_asked(raised)
 
         answers_through = pending[-1].id
         messages = enforce(
