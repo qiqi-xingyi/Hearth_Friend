@@ -119,6 +119,7 @@ def cmd_chat(config: Config) -> int:
         user_id=config.user_id,
         channel=config.channel,
         context_turns=config.context_turns,
+        context_chars=config.context_chars,
         temperature=config.temperature,
         embedding=build_embedding(config),
     )

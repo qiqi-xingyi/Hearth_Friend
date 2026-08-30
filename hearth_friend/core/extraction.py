@@ -139,3 +139,87 @@ def extract_curiosity(
         if len(out) >= MAX_NEW_CURIOSITY:
             break
     return out
+
+
+MAX_NEW_MEMORIES = 5
+
+_MEMORY_INSTRUCTION = """下面是一段聊天记录。把其中值得记住的东西挑出来，分两类。
+
+**about_you** —— 关于他的、以后一直成立的事。
+**一律用第三人称写「他……」**，因为这些是你记在自己本子上的、关于他的事，
+写成「你……」你以后会读成是在说自己：
+  名字、称呼、养的宠物、在做什么、住哪、习惯、明确的喜好和讨厌
+  kind 用 fact（事实）／preference（偏好）／situation（当前处境）
+
+**episodes** —— 具体发生过的事，用你的第一人称记下来：
+  「他上周三面试搞砸了，准备了两周」这种
+  importance 0 到 1：日常寒暄 0.1–0.2，他在意的事 0.5 以上
+
+两类都要给 cues：会让人想起这条的词，空格分隔，**要短、要具体**
+（写「QB 猫 宠物」，不要写「他的宠物情况」；一两个字的词也要写上）
+
+聊天记录里「他：」是对方说的，「你：」是你自己说的。
+
+不要记：
+  - 「你：」那些行里的内容——那是你自己，不是他
+  - 只在这一刻成立的（「他现在在改论文」这种，除非改论文这件事本身重要）
+  - 已经在「你已经知道的」里的
+
+宁可少，不要凑。只输出 JSON：
+{"about_you":[{"kind":"...","cues":"...","statement":"..."}],
+ "episodes":[{"cues":"...","content":"...","importance":0.5}]}"""
+
+
+def extract_memories(
+    provider: ModelProvider, transcript: list[str], known: list[str]
+) -> dict:
+    """One call at the end of a session, over both sides of it."""
+    if not transcript:
+        return {"about_you": [], "episodes": []}
+
+    known_block = "\n".join(f"- {k}" for k in known) or "（还没有）"
+    messages: list[Message] = [
+        {"role": "system", "content": _MEMORY_INSTRUCTION},
+        {
+            "role": "user",
+            "content": (
+                f"【你已经知道的】\n{known_block}\n\n"
+                "【这段聊天】\n" + "\n".join(transcript)
+            ),
+        },
+    ]
+    try:
+        data = provider.structured_output(messages, temperature=0.2)
+    except (ProviderError, AttributeError):
+        return {"about_you": [], "episodes": []}
+
+    facts = []
+    for entry in data.get("about_you") or []:
+        if not isinstance(entry, dict):
+            continue
+        kind = str(entry.get("kind", "")).strip()
+        cues = str(entry.get("cues", "")).strip()
+        statement = str(entry.get("statement", "")).strip()
+        if kind not in ("fact", "preference", "situation") or not cues or not statement:
+            continue
+        facts.append({"kind": kind, "cues": cues[:200], "statement": statement[:300]})
+
+    episodes = []
+    for entry in data.get("episodes") or []:
+        if not isinstance(entry, dict):
+            continue
+        cues = str(entry.get("cues", "")).strip()
+        content = str(entry.get("content", "")).strip()
+        if not cues or not content:
+            continue
+        try:
+            importance = max(0.0, min(1.0, float(entry.get("importance", 0.3))))
+        except (TypeError, ValueError):
+            importance = 0.3
+        episodes.append(
+            {"cues": cues[:200], "content": content[:500], "importance": importance}
+        )
+        if len(episodes) >= MAX_NEW_MEMORIES:
+            break
+
+    return {"about_you": facts, "episodes": episodes}

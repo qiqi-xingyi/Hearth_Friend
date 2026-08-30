@@ -299,3 +299,18 @@ def test_you_can_keep_talking_while_she_is_composing(store, persona):
         assert said == ["thinking about it"]
         # What arrived mid-reply is still owed an answer.
         assert [t.content for t in runtime.unanswered()] == ["and another thing"]
+
+
+def test_the_context_is_bounded_by_size_not_only_by_count(store, persona):
+    """Forty one-word turns and forty pasted documents are the same count and
+    very different prompts."""
+    provider = StubProvider(["ok"])
+    runtime = build(store, persona, provider, context_turns=40, context_chars=500)
+    with runtime:
+        for index in range(12):
+            runtime.ingest("x" * 200 + str(index))
+        list(runtime.reply())
+
+    history = "".join(spoken(provider.calls[-1]))
+    assert len(history) <= 800, "the window has to hold"
+    assert "11" in history, "and what survives is the most recent"

@@ -302,10 +302,133 @@ class Store:
             "UPDATE session SET extracted_at = ? WHERE id = ?", (utcnow(), session_id)
         )
 
+    # -------------------------------------------------------------- memory
+
+    def add_about_you(
+        self, kind: str, cues: str, statement: str, *, source_turn_id: int | None = None
+    ) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO about_you (kind, cues, statement, source_turn_id, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (kind, cues, statement, source_turn_id, utcnow()),
+        )
+        return int(cur.lastrowid)
+
+    def about_you(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT id, kind, cues, statement FROM about_you"
+            " WHERE superseded_by IS NULL AND retired_at IS NULL ORDER BY id"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def has_about_you(self, statement: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM about_you WHERE statement = ? LIMIT 1", (statement,)
+        ).fetchone()
+        return row is not None
+
+    def add_memory(
+        self,
+        content: str,
+        cues: str,
+        *,
+        importance: float,
+        event_time: str | None = None,
+        source_turn_ids: list[int] | None = None,
+    ) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO memory (content, cues, event_time, importance, strength,"
+            "                    source_json, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                content,
+                cues,
+                event_time,
+                importance,
+                importance,  # starts at its own weight and decays from there
+                json.dumps(source_turn_ids or [], ensure_ascii=False),
+                utcnow(),
+            ),
+        )
+        memory_id = int(cur.lastrowid)
+        for cue in {c for c in cues.split() if c}:
+            self.conn.execute(
+                "INSERT INTO memory_cue (cue, memory_id) VALUES (?, ?)", (cue, memory_id)
+            )
+        return memory_id
+
+    def has_memory(self, content: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM memory WHERE content = ? LIMIT 1", (content,)
+        ).fetchone()
+        return row is not None
+
+    def cue_vocabulary(self) -> list[str]:
+        """Every cue anyone has ever been reminded by.
+
+        Grows with the variety of what you talk about, not with how much you
+        have talked, which is why the first stage stays cheap.
+        """
+        return [
+            row["cue"] for row in self.conn.execute("SELECT DISTINCT cue FROM memory_cue")
+        ]
+
+    def memory_candidates(
+        self, cues: list[str], *, per_source: int = 80, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """First stage: bounded, indexed, no vectors touched.
+
+        Three ways in -- reminded of it, it happened recently, or it mattered --
+        because each alone misses obvious things.
+        """
+        found: dict[int, dict[str, Any]] = {}
+        columns = (
+            "id, content, cues, event_time, importance, strength, recall_count,"
+            " embedding, embedding_model"
+        )
+
+        if cues:
+            marks = ",".join("?" * len(cues))
+            rows = self.conn.execute(
+                f"SELECT {columns} FROM memory WHERE status = 'active' AND id IN ("
+                f"  SELECT memory_id FROM memory_cue WHERE cue IN ({marks}))"
+                " ORDER BY importance DESC LIMIT ?",
+                (*cues, per_source),
+            ).fetchall()
+            found.update({row["id"]: dict(row) for row in rows})
+
+        for order in ("id DESC", "importance DESC"):
+            rows = self.conn.execute(
+                f"SELECT {columns} FROM memory WHERE status = 'active'"
+                f" ORDER BY {order} LIMIT ?",
+                (per_source // 2,),
+            ).fetchall()
+            for row in rows:
+                found.setdefault(row["id"], dict(row))
+
+        return list(found.values())[:limit]
+
+    def touch_memories(self, memory_ids: list[int]) -> None:
+        """Recalling something makes it stick a little harder.
+
+        Diminishing, so that a thing which keeps coming up cannot ratchet itself
+        into permanence.
+        """
+        if not memory_ids:
+            return
+        marks = ",".join("?" * len(memory_ids))
+        self.conn.execute(
+            f"UPDATE memory SET recall_count = recall_count + 1,"
+            f"  last_recalled_at = ?,"
+            f"  strength = MIN(1.0, strength + 0.1 * (1.0 - strength))"
+            f" WHERE id IN ({marks})",
+            (utcnow(), *memory_ids),
+        )
+
     # ------------------------------------------------------------- vectors
 
     def set_embedding(self, table: str, row_id: int, blob: bytes, model: str) -> None:
-        if table not in ("reading", "curiosity"):
+        if table not in ("reading", "curiosity", "memory"):
             raise ValueError(f"no embeddings on {table!r}")
         self.conn.execute(
             f"UPDATE {table} SET embedding = ?, embedding_model = ? WHERE id = ?",
@@ -321,9 +444,13 @@ class Store:
         invalidates every vector, and there is otherwise no way to recompute
         only what needs it.
         """
-        if table not in ("reading", "curiosity"):
+        if table not in ("reading", "curiosity", "memory"):
             raise ValueError(f"no embeddings on {table!r}")
-        text = "title || ' ' || COALESCE(summary, '')" if table == "reading" else "question"
+        text = {
+            "reading": "title || ' ' || COALESCE(summary, '')",
+            "curiosity": "question",
+            "memory": "content || ' ' || cues",
+        }[table]
         rows = self.conn.execute(
             f"SELECT id, {text} AS text FROM {table}"
             " WHERE embedding IS NULL OR embedding_model IS NOT ?"

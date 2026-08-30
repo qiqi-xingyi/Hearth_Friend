@@ -49,6 +49,7 @@ class Config:
     model: str
     temperature: float
     context_turns: int
+    context_chars: int
     request_timeout: float
     settle_seconds: float
     embedding_model: str
@@ -71,6 +72,10 @@ class Config:
             # How many past turns are replayed as context. M0 has no summarisation,
             # so this is a hard window rather than a budget.
             context_turns=int(_get("CONTEXT_TURNS", "40")),
+            # A count is not a budget: forty turns of one word and forty turns
+            # of a pasted document are the same number and very different
+            # prompts. Whichever limit is reached first wins.
+            context_chars=int(_get("CONTEXT_CHARS", "6000")),
             request_timeout=float(_get("REQUEST_TIMEOUT", "60")),
             # How long she waits after you stop typing before answering, so that
             # sending three lines in a row gets one reply rather than three.

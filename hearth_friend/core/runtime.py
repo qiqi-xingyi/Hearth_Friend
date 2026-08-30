@@ -21,7 +21,13 @@ from hearth_friend.core.curiosity import check as curiosity_check
 from hearth_friend.core.curiosity import (
     as_prompt_block as curiosity_block,
 )
-from hearth_friend.core.extraction import extract_curiosity, extract_self_facts
+from hearth_friend.core.extraction import (
+    extract_curiosity,
+    extract_memories,
+    extract_self_facts,
+)
+from hearth_friend.core.memory import Memory, cues_present
+from hearth_friend.core.memory import as_prompt_block as memory_block
 from hearth_friend.core.perception import Perception, perceive
 from hearth_friend.core.prompt import (
     reading_block,
@@ -59,6 +65,7 @@ class Runtime:
         user_id: str,
         channel: str,
         context_turns: int = 40,
+        context_chars: int = 6000,
         temperature: float | None = None,
         perceive_enabled: bool = True,
         embedding=None,
@@ -69,6 +76,7 @@ class Runtime:
         self.user_id = user_id
         self.channel = channel
         self.context_turns = context_turns
+        self.context_chars = context_chars
         self.temperature = temperature
         self.perceive_enabled = perceive_enabled
         self.embedding = embedding
@@ -131,6 +139,7 @@ class Runtime:
                     source_turn_id=said[-1].id,
                 )
                 added += 1
+        self._extract_memories(session_id)
         self._extract_curiosity(session_id)
         self.store.mark_extracted(session_id)
         return added
@@ -146,7 +155,9 @@ class Runtime:
             return 0
 
         turns = self.store.session_turns(session_id)
-        transcript = [f"{t.role}: {t.content}" for t in turns]
+        transcript = [
+            f"{'他' if t.role == 'user' else '你'}：{t.content}" for t in turns
+        ]
         private = [t.content for t in turns if t.role == "user"]
         known = [row["question"] for row in self.store.open_curiosity(limit=20)]
 
@@ -225,10 +236,17 @@ class Runtime:
         )
         if wondering:
             messages.append({"role": "system", "content": wondering})
-        for turn in self.store.recent_turns(self.user_id, self.context_turns):
+        for turn in self.recent_within_budget():
             messages.append({"role": turn.role, "content": turn.content})
         if remembered is not None:
             messages.append({"role": "system", "content": as_prompt_block(remembered)})
+        if state is not None and cue_text is not None:
+            messages.append({
+                "role": "system",
+                "content": memory_block(
+                    self.recall(cue_text, state), self.store.about_you()
+                ),
+            })
         if state is not None:
             messages.append(
                 {"role": "system", "content": state_note(state, perception, self.persona)}
@@ -284,6 +302,109 @@ class Runtime:
                     seen += 1
         return seen
 
+    def recent_within_budget(self) -> list[Turn]:
+        """The tail of the conversation, under both limits.
+
+        Filled newest-first and reversed, so what survives is the most recent
+        rather than an arbitrary prefix.
+        """
+        turns = self.store.recent_turns(self.user_id, self.context_turns)
+        kept: list[Turn] = []
+        used = 0
+        for turn in reversed(turns):
+            used += len(turn.content)
+            if kept and used > self.context_chars:
+                break
+            kept.append(turn)
+        return list(reversed(kept))
+
+    # ---------------------------------------------------------------- memory
+
+    def recall(self, cue_text: str, state: State, k: int = 6) -> list[Memory]:
+        """Two stages, so that what this costs does not depend on how much has
+        ever happened.
+
+        First an indexed shortlist -- reminded of it, recent, or it mattered.
+        Then attention over that shortlist alone, which is a few hundred
+        kilobytes of vectors whether the table holds a thousand rows or a
+        million.
+        """
+        cues = cues_present(self.store.cue_vocabulary(), cue_text)
+        candidates = self.store.memory_candidates(cues)
+        if not candidates:
+            return []
+
+        model = self.embedding.model_id if self.embedding else None
+        usable = [
+            row
+            for row in candidates
+            if row["embedding"] and row["embedding_model"] == model
+        ]
+
+        if self.embedding is None or len(usable) < 2:
+            picked = sorted(
+                candidates, key=lambda r: -(r["importance"] + r["strength"])
+            )[:k]
+        else:
+            query = self.embedding.embed([cue_text])[0]
+            order = attend(
+                query,
+                [unpack(row["embedding"]) for row in usable],
+                k=k,
+                temperature=temperature_for(state.engagement, state.energy),
+            )
+            picked = [usable[i] for i in order]
+
+        self.store.touch_memories([row["id"] for row in picked])
+        return [
+            Memory(
+                row["id"],
+                row["content"],
+                row["cues"],
+                row["event_time"],
+                row["importance"],
+                row["strength"],
+                row["embedding"],
+                row["embedding_model"],
+            )
+            for row in picked
+        ]
+
+    def _extract_memories(self, session_id: int) -> int:
+        turns = self.store.session_turns(session_id)
+        if sum(len(t.content) for t in turns) < 30:
+            return 0
+
+        # Labelled in the language of the instruction. With "user:" and
+        # "assistant:" against a Chinese prompt she read her own lines as his,
+        # and came away believing he draws for a living and gets lost in Zelda.
+        transcript = [
+            f"{'他' if t.role == 'user' else '你'}：{t.content}" for t in turns
+        ]
+        known = [row["statement"] for row in self.store.about_you()]
+        found = extract_memories(self.provider, transcript, known)
+
+        added = 0
+        for entry in found["about_you"]:
+            if not self.store.has_about_you(entry["statement"]):
+                self.store.add_about_you(
+                    entry["kind"],
+                    entry["cues"],
+                    entry["statement"],
+                    source_turn_id=turns[-1].id,
+                )
+                added += 1
+        for entry in found["episodes"]:
+            if not self.store.has_memory(entry["content"]):
+                self.store.add_memory(
+                    entry["content"],
+                    entry["cues"],
+                    importance=entry["importance"],
+                    source_turn_ids=[t.id for t in turns],
+                )
+                added += 1
+        return added
+
     # ------------------------------------------------------------- attention
 
     def catch_up_embeddings(self, limit: int = 200) -> int:
@@ -293,7 +414,7 @@ class Runtime:
             return 0
         model = self.embedding.model_id
         done = 0
-        for table in ("reading", "curiosity"):
+        for table in ("reading", "curiosity", "memory"):
             rows = self.store.rows_needing_embedding(table, model, limit)
             if not rows:
                 continue

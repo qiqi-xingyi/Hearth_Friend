@@ -116,6 +116,7 @@ environment variables always win over the file.
 | `HEARTH_PERSONA` | `persona/example.yaml` | |
 | `HEARTH_DB_PATH` | `data/hearth.db` | |
 | `HEARTH_CONTEXT_TURNS` | `40` | past turns replayed as context |
+| `HEARTH_CONTEXT_CHARS` | `6000` | and a size limit, whichever is reached first |
 | `HEARTH_SETTLE_SECONDS` | `2.0` | how long she waits for you to finish |
 | `HEARTH_TEMPERATURE` | `1.0` | |
 | `HEARTH_EMBEDDING_MODEL` | `BAAI/bge-m3` | local; `off` falls back to keyword matching |
