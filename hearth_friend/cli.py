@@ -117,6 +117,14 @@ def cmd_chat(config: Config) -> int:
 
     def speaking() -> None:
         nonlocal last_spoke
+        # Reading past sessions happens here rather than at startup, so a
+        # backlog does not stand between you and saying hello.
+        try:
+            learned = runtime.catch_up_extraction()
+            if learned:
+                print(_style(f"[settled {learned} more things about herself]", DIM))
+        except Exception:
+            pass
         while not stop.wait(0.2):
             if not runtime.unanswered():
                 continue
@@ -165,6 +173,13 @@ def cmd_chat(config: Config) -> int:
         finally:
             stop.set()
             thread.join(timeout=config.request_timeout + 5)
+
+    # The session is closed by the context manager above; read it now.
+    try:
+        if runtime.catch_up_extraction(limit=1):
+            pass
+    except ProviderError:
+        pass
 
     store.close()
     return 0

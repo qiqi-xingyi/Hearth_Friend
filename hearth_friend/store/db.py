@@ -271,6 +271,29 @@ class Store:
         )
         return int(cur.lastrowid)
 
+    def assistant_turns(self, session_id: int) -> list[Turn]:
+        rows = self.conn.execute(
+            "SELECT id, session_id, role, content, created_at FROM turn"
+            " WHERE session_id = ? AND role = 'assistant' ORDER BY id",
+            (session_id,),
+        ).fetchall()
+        return [Turn(**dict(row)) for row in rows]
+
+    def unextracted_sessions(self, user_id: str) -> list[int]:
+        """Finished sessions whose contents have not been folded back in yet."""
+        rows = self.conn.execute(
+            "SELECT id FROM session"
+            " WHERE user_id = ? AND ended_at IS NOT NULL AND extracted_at IS NULL"
+            " ORDER BY id",
+            (user_id,),
+        ).fetchall()
+        return [int(row["id"]) for row in rows]
+
+    def mark_extracted(self, session_id: int) -> None:
+        self.conn.execute(
+            "UPDATE session SET extracted_at = ? WHERE id = ?", (utcnow(), session_id)
+        )
+
     # ------------------------------------------------------------- selfhood
 
     def self_facts(self) -> list[dict[str, Any]]:

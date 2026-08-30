@@ -17,10 +17,16 @@ class StubProvider:
     newlines, so the stub joins with them.
     """
 
-    def __init__(self, messages: Sequence[str] = ("hi",), fail: bool = False):
+    def __init__(
+        self,
+        messages: Sequence[str] = ("hi",),
+        fail: bool = False,
+        structured: dict | None = None,
+    ):
         self.model_id = "stub"
         self.messages = list(messages)
         self.fail = fail
+        self.structured = structured or {}
         self.calls: list[list[Message]] = []
 
     def generate(self, messages, *, temperature=None) -> str:
@@ -31,6 +37,12 @@ class StubProvider:
 
     def stream(self, messages, *, temperature=None) -> Iterator[str]:
         yield self.generate(messages, temperature=temperature)
+
+    def structured_output(self, messages, *, temperature=None) -> dict:
+        self.calls.append(list(messages))
+        if self.fail:
+            raise ProviderError("stub failure")
+        return dict(self.structured)
 
 
 @pytest.fixture

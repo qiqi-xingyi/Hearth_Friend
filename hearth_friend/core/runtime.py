@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Iterator, Sequence
 
+from hearth_friend.core.extraction import extract_self_facts
 from hearth_friend.core.perception import Perception, perceive
 from hearth_friend.core.prompt import split_messages, state_note, system_prompt
 from hearth_friend.core.selfhood import (
@@ -77,8 +78,54 @@ class Runtime:
 
     def end_session(self) -> None:
         if self.session_id is not None:
-            self.store.close_session(self.session_id)
-            self.session_id = None
+            finished, self.session_id = self.session_id, None
+            self.store.close_session(finished)
+
+    def extract_session(self, session_id: int) -> int:
+        """Fold what she said in one session into what is true about her.
+
+        Runs off the reply path, once per session. Marked done either way, so a
+        session that yielded nothing is not reconsidered forever.
+        """
+        said = self.store.assistant_turns(session_id)
+        # By volume, not by message count: her replies split into one to three
+        # messages depending on the persona, so counting them skipped whole
+        # sessions that had plenty in them.
+        # UNCALIBRATED, deliberately low: a call costs a fraction of a cent and
+        # what it catches is a thing about her that would otherwise drift. Only
+        # pure noise is worth skipping.
+        if sum(len(t.content) for t in said) < 15:
+            self.store.mark_extracted(session_id)
+            return 0
+
+        known = [row["statement"] for row in self.store.self_facts()]
+        found = extract_self_facts(self.provider, [t.content for t in said], known)
+
+        added = 0
+        for entry in found:
+            if not self.store.has_self_statement(entry["say"]):
+                self.store.add_self_fact(
+                    entry["kind"],
+                    entry["cues"],
+                    entry["say"],
+                    source_turn_id=said[-1].id,
+                )
+                added += 1
+        self.store.mark_extracted(session_id)
+        return added
+
+    def catch_up_extraction(self, limit: int = 3) -> int:
+        """Sessions that ended without being read, because the process died.
+
+        Bounded: after a long gap you want her caught up, not a queue of calls
+        between you and saying hello.
+        """
+        pending = [
+            sid
+            for sid in self.store.unextracted_sessions(self.user_id)
+            if sid != self.session_id
+        ]
+        return sum(self.extract_session(sid) for sid in pending[-limit:])
 
     def __enter__(self) -> "Runtime":
         self.start_session()
