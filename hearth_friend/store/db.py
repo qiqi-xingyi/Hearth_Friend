@@ -22,6 +22,18 @@ from typing import Any
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
 
+def hours_between(timestamp: str | None, *, now: datetime | None = None) -> float:
+    """Elapsed hours, treating a missing timestamp as no time at all."""
+    if not timestamp:
+        return 0.0
+    now = now or datetime.now(timezone.utc)
+    try:
+        then = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return 0.0
+    return max(0.0, (now - then).total_seconds() / 3600.0)
+
+
 def utcnow() -> str:
     """Timestamps are ISO-8601 UTC text: portable, sortable, exports cleanly."""
     return datetime.now(timezone.utc).isoformat()
@@ -305,14 +317,65 @@ class Store:
     # -------------------------------------------------------------- memory
 
     def add_about_you(
-        self, kind: str, cues: str, statement: str, *, source_turn_id: int | None = None
+        self,
+        kind: str,
+        cues: str,
+        statement: str,
+        *,
+        source_turn_id: int | None = None,
+        source_memory_ids: list[int] | None = None,
     ) -> int:
         cur = self.conn.execute(
-            "INSERT INTO about_you (kind, cues, statement, source_turn_id, created_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (kind, cues, statement, source_turn_id, utcnow()),
+            "INSERT INTO about_you (kind, cues, statement, source_turn_id, created_at,"
+            "                       source_json)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                kind,
+                cues,
+                statement,
+                source_turn_id,
+                utcnow(),
+                json.dumps(source_memory_ids, ensure_ascii=False)
+                if source_memory_ids
+                else None,
+            ),
         )
         return int(cur.lastrowid)
+
+    def patterns(self) -> list[dict[str, Any]]:
+        """What she has concluded, with what she concluded it from."""
+        rows = self.conn.execute(
+            "SELECT id, statement, source_json, created_at FROM about_you"
+            " WHERE kind = 'pattern' AND superseded_by IS NULL AND retired_at IS NULL"
+            " ORDER BY id DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def memories_by_id(self, ids: list[int]) -> list[dict[str, Any]]:
+        if not ids:
+            return []
+        marks = ",".join("?" * len(ids))
+        rows = self.conn.execute(
+            f"SELECT id, content FROM memory WHERE id IN ({marks})", tuple(ids)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def recurring_cues(self, minimum: int = 3) -> list[tuple[str, list[int]]]:
+        """Cues that keep coming up, with the memories under them.
+
+        Repetition is the only evidence available for a pattern. One occasion is
+        an event; three is the beginning of a claim about someone.
+        """
+        rows = self.conn.execute(
+            "SELECT c.cue, GROUP_CONCAT(c.memory_id) AS ids, COUNT(*) AS n"
+            "  FROM memory_cue c JOIN memory m ON m.id = c.memory_id"
+            " WHERE m.status = 'active'"
+            " GROUP BY c.cue HAVING n >= ? ORDER BY n DESC",
+            (minimum,),
+        ).fetchall()
+        return [
+            (row["cue"], [int(i) for i in row["ids"].split(",")]) for row in rows
+        ]
 
     def about_you(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
@@ -407,6 +470,69 @@ class Store:
                 found.setdefault(row["id"], dict(row))
 
         return list(found.values())[:limit]
+
+    def forget_pass(self) -> tuple[int, int]:
+        """Let time act on what she holds, and on what she has let go.
+
+        Returns (newly forgotten, revived). Forgetting is a status change, never
+        a delete: the row stays, because what she can no longer bring to mind is
+        not the same as what never happened.
+        """
+        from hearth_friend.core.forgetting import effective_strength, FORGOTTEN_BELOW
+
+        rows = self.conn.execute(
+            "SELECT id, importance, strength, status,"
+            "       COALESCE(last_recalled_at, created_at) AS since"
+            "  FROM memory WHERE status IN ('active', 'forgotten')"
+        ).fetchall()
+
+        forgotten, revived = [], []
+        for row in rows:
+            hours = hours_between(row["since"])
+            live = effective_strength(row["strength"], row["importance"], hours)
+            if row["status"] == "active" and live < FORGOTTEN_BELOW:
+                forgotten.append(row["id"])
+            elif row["status"] == "forgotten" and live >= FORGOTTEN_BELOW:
+                revived.append(row["id"])
+
+        for ids, status in ((forgotten, "forgotten"), (revived, "active")):
+            if ids:
+                marks = ",".join("?" * len(ids))
+                self.conn.execute(
+                    f"UPDATE memory SET status = ? WHERE id IN ({marks})", (status, *ids)
+                )
+        return len(forgotten), len(revived)
+
+    def revive_memories(self, memory_ids: list[int]) -> int:
+        """Bring something back because the cue was direct enough.
+
+        People do this. Something you had not thought about in years surfaces
+        whole when the right thing is said, and there is no reason she should be
+        the one who cannot.
+        """
+        if not memory_ids:
+            return 0
+        marks = ",".join("?" * len(memory_ids))
+        cur = self.conn.execute(
+            f"UPDATE memory SET status = 'active', strength = MAX(strength, 0.4),"
+            f"  last_recalled_at = ? WHERE id IN ({marks}) AND status = 'forgotten'",
+            (utcnow(), *memory_ids),
+        )
+        return cur.rowcount
+
+    def forgotten_matching(self, cues: list[str], limit: int = 3) -> list[int]:
+        """Forgotten rows a direct cue reaches."""
+        if not cues:
+            return []
+        marks = ",".join("?" * len(cues))
+        rows = self.conn.execute(
+            f"SELECT DISTINCT m.id FROM memory m"
+            f"  JOIN memory_cue c ON c.memory_id = m.id"
+            f" WHERE m.status = 'forgotten' AND c.cue IN ({marks})"
+            f" ORDER BY m.importance DESC LIMIT ?",
+            (*cues, limit),
+        ).fetchall()
+        return [int(row["id"]) for row in rows]
 
     def touch_memories(self, memory_ids: list[int]) -> None:
         """Recalling something makes it stick a little harder.

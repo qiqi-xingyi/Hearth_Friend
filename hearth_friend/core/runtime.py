@@ -24,6 +24,7 @@ from hearth_friend.core.curiosity import (
 from hearth_friend.core.extraction import (
     extract_curiosity,
     extract_memories,
+    extract_pattern,
     extract_self_facts,
 )
 from hearth_friend.core.memory import Memory, cues_present
@@ -339,6 +340,10 @@ class Runtime:
         million.
         """
         cues = cues_present(self.store.cue_vocabulary(), cue_text)
+        # Something she had let go of can come back when the cue is direct
+        # enough. People do this, and there is no reason she should be the one
+        # who cannot.
+        self.store.revive_memories(self.store.forgotten_matching(cues))
         candidates = self.store.memory_candidates(cues)
         if not candidates:
             return []
@@ -378,6 +383,36 @@ class Runtime:
             )
             for row in picked
         ]
+
+    def generalise(self, minimum: int = 3) -> str | None:
+        """Draw at most one understanding from things that keep recurring.
+
+        One per pass on purpose. A conclusion about someone should accumulate at
+        the speed evidence does, not at the speed a loop runs.
+        """
+        import json
+
+        covered: set[int] = set()
+        for row in self.store.patterns():
+            covered.update(json.loads(row["source_json"] or "[]"))
+
+        for cue, memory_ids in self.store.recurring_cues(minimum):
+            fresh = [i for i in memory_ids if i not in covered]
+            if len(fresh) < minimum:
+                continue
+            episodes = [row["content"] for row in self.store.memories_by_id(fresh)]
+            pattern = extract_pattern(self.provider, cue, episodes)
+            if not pattern:
+                continue
+            self.store.add_about_you(
+                "pattern", cue, pattern, source_memory_ids=fresh
+            )
+            return pattern
+        return None
+
+    def let_time_pass(self) -> tuple[int, int]:
+        """Decay, applied. Off the reply path, once per attach."""
+        return self.store.forget_pass()
 
     def _extract_memories(self, session_id: int) -> int:
         turns = self.store.session_turns(session_id)

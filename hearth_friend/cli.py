@@ -50,6 +50,17 @@ def cmd_status(config: Config) -> int:
     for key, value in rows:
         print(f"{_style(key.ljust(width), DIM)}  {value}")
 
+    import json as _json
+
+    drawn = store.patterns()
+    if drawn:
+        print(_style("\nwhat she has worked out", DIM))
+        for row in drawn:
+            print(f"  {row['statement']}")
+            evidence = store.memories_by_id(_json.loads(row["source_json"] or "[]"))
+            for item in evidence:
+                print(_style(f"    ← {item['content'][:56]}", DIM))
+
     wondering = store.open_curiosity(limit=8)
     if wondering:
         print(_style("\nwondering about", DIM))
@@ -161,6 +172,18 @@ def cmd_chat(config: Config) -> int:
                 note(f"[read {seen} new things]")
         except Unreachable:
             note("[could not reach anything to read]")
+        except Exception:
+            pass
+        try:
+            gone, back = runtime.let_time_pass()
+            if gone or back:
+                note(f"[{gone} things faded, {back} came back]")
+        except Exception:
+            pass
+        try:
+            drawn = runtime.generalise()
+            if drawn:
+                note(f"[worked something out: {drawn}]")
         except Exception:
             pass
         try:

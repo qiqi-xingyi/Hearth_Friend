@@ -223,3 +223,51 @@ def extract_memories(
             break
 
     return {"about_you": facts, "episodes": episodes}
+
+
+_PATTERN_INSTRUCTION = """下面是同一个话题下发生过的几件事。看看它们合起来是不是说明了什么。
+
+只有当这几件事**指向同一个稳定的模式**时才给结论。多数时候它们只是碰巧沾了同一个词，
+那就返回空——这很正常，不要为了给答案而硬凑。
+
+如果给，结论要：
+  - 关于他的、比较稳的倾向或习惯
+  - **留有余地**。你只看到了这几次，不是全部。用「好像」「多半」这种说法，
+    不要写成定论
+  - 一句话，不超过 30 字
+
+绝对不要下这类结论：
+  - 关于他对你的态度（「他不想理我」这种）——你手上的证据不足以支撑，而且错了代价很大
+  - 给他贴性格标签（「他是个冷淡的人」）
+
+只输出 JSON：{"pattern": "……"} 或 {"pattern": null}"""
+
+
+def extract_pattern(provider: ModelProvider, cue: str, episodes: list[str]) -> str | None:
+    """Whether several occasions add up to something.
+
+    Deliberately reluctant. This is the edge of attribution, where being wrong
+    stops being annoying: three tired evenings become "he does not want to talk
+    to me", and everything after is built on it.
+    """
+    if len(episodes) < 3:
+        return None
+
+    messages: list[Message] = [
+        {"role": "system", "content": _PATTERN_INSTRUCTION},
+        {
+            "role": "user",
+            "content": f"【话题】{cue}\n\n【发生过的事】\n"
+            + "\n".join(f"- {e}" for e in episodes),
+        },
+    ]
+    try:
+        data = provider.structured_output(messages, temperature=0.2)
+    except (ProviderError, AttributeError):
+        return None
+
+    pattern = data.get("pattern")
+    if not isinstance(pattern, str):
+        return None
+    pattern = pattern.strip()
+    return pattern[:120] if 4 <= len(pattern) <= 120 else None
