@@ -180,4 +180,4 @@ daily. No multi-tenancy, no admin console, no hosted service.
 
 ## License
 
-[MIT](LICENSE)
+[Apache 2.0](LICENSE)
