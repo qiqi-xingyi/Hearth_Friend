@@ -271,6 +271,44 @@ class Store:
         )
         return int(cur.lastrowid)
 
+    # ------------------------------------------------------------- selfhood
+
+    def self_facts(self) -> list[dict[str, Any]]:
+        """Everything currently true about her."""
+        rows = self.conn.execute(
+            "SELECT id, kind, cues, statement FROM self_fact"
+            " WHERE superseded_by IS NULL ORDER BY id"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_self_fact(
+        self,
+        kind: str,
+        cues: str,
+        statement: str,
+        *,
+        source_turn_id: int | None = None,
+    ) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO self_fact (kind, cues, statement, source_turn_id, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (kind, cues, statement, source_turn_id, utcnow()),
+        )
+        return int(cur.lastrowid)
+
+    def supersede_self_fact(self, old_id: int, new_id: int) -> None:
+        """Kept rather than deleted: that she used to think otherwise is part of
+        the record, and is the only way a change in her is ever visible."""
+        self.conn.execute(
+            "UPDATE self_fact SET superseded_by = ? WHERE id = ?", (new_id, old_id)
+        )
+
+    def has_self_statement(self, statement: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM self_fact WHERE statement = ? LIMIT 1", (statement,)
+        ).fetchone()
+        return row is not None
+
     # ----------------------------------------------------------------- misc
 
     def stats(self, user_id: str | None = None) -> dict[str, Any]:

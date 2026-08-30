@@ -19,6 +19,12 @@ from typing import Iterator, Sequence
 
 from hearth_friend.core.perception import Perception, perceive
 from hearth_friend.core.prompt import split_messages, state_note, system_prompt
+from hearth_friend.core.selfhood import (
+    SelfFact,
+    as_prompt_block,
+    parse_cues,
+    recall,
+)
 from hearth_friend.core.state import State, after_perceiving, decayed, hours_since
 from hearth_friend.providers.base import Message, ModelProvider, ProviderError
 from hearth_friend.store import Store, Turn
@@ -51,7 +57,23 @@ class Runtime:
 
     def start_session(self) -> int:
         self.session_id = self.store.open_session(self.user_id, self.channel)
+        self.seed_self()
         return self.session_id
+
+    def seed_self(self) -> int:
+        """Put what the persona file declares about her into the database.
+
+        Idempotent by statement, so adding a line to the persona file later
+        takes effect, and nothing she has worked out since is overwritten.
+        """
+        added = 0
+        for entry in getattr(self.persona, "self_facts", ()):
+            if not self.store.has_self_statement(entry["statement"]):
+                self.store.add_self_fact(
+                    entry["kind"], entry["cues"], entry["statement"]
+                )
+                added += 1
+        return added
 
     def end_session(self) -> None:
         if self.session_id is not None:
@@ -67,8 +89,19 @@ class Runtime:
 
     # --------------------------------------------------------------- context
 
+    def remembered_self(self, text: str) -> list[SelfFact]:
+        """What this stretch of conversation should bring to her mind."""
+        facts = [
+            SelfFact(row["id"], row["kind"], parse_cues(row["cues"]), row["statement"])
+            for row in self.store.self_facts()
+        ]
+        return recall(facts, text)
+
     def build_messages(
-        self, state: State | None = None, perception: Perception | None = None
+        self,
+        state: State | None = None,
+        perception: Perception | None = None,
+        remembered: list[SelfFact] | None = None,
     ) -> list[Message]:
         """Stable persona, then history, then what she may do this turn.
 
@@ -81,6 +114,8 @@ class Runtime:
         ]
         for turn in self.store.recent_turns(self.user_id, self.context_turns):
             messages.append({"role": turn.role, "content": turn.content})
+        if remembered is not None:
+            messages.append({"role": "system", "content": as_prompt_block(remembered)})
         if state is not None:
             messages.append(
                 {"role": "system", "content": state_note(state, perception, self.persona)}
@@ -167,9 +202,17 @@ class Runtime:
         assert self.session_id is not None
 
         state, perception = self._register(pending)
+        # Recall is keyed on what is actually being talked about: the messages
+        # she is answering plus a little of what came before them.
+        cue_text = "\n".join(
+            [t.content for t in self.store.recent_turns(self.user_id, 6)]
+            + [t.content for t in pending]
+        )
+        remembered = self.remembered_self(cue_text)
         try:
             text = self.provider.generate(
-                self.build_messages(state, perception), temperature=self.temperature
+                self.build_messages(state, perception, remembered),
+                temperature=self.temperature,
             )
         except ProviderError:
             raise

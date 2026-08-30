@@ -99,6 +99,7 @@ class Persona:
     boundaries: tuple[str, ...] = field(default_factory=tuple)
     traits: Traits = field(default_factory=Traits)
     message_style: MessageStyle = field(default_factory=MessageStyle)
+    self_facts: tuple[dict, ...] = field(default_factory=tuple)
     source_path: Path | None = None
 
     @classmethod
@@ -134,5 +135,27 @@ class Persona:
             boundaries=tuple(str(b).strip() for b in boundaries if str(b).strip()),
             traits=Traits.from_dict(data.get("traits")),
             message_style=MessageStyle.from_dict(data.get("message_style")),
+            self_facts=_read_self_facts(data.get("self"), path),
             source_path=path,
         )
+
+
+def _read_self_facts(raw: object, path: Path) -> tuple[dict, ...]:
+    """Seed entries for what is true about her, from the persona file."""
+    if not raw:
+        return ()
+    if not isinstance(raw, list):
+        raise PersonaError(f"persona 'self' must be a list: {path}")
+    out = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise PersonaError(f"each 'self' entry must be a mapping: {path}")
+        kind = str(entry.get("kind", "fact")).strip()
+        if kind not in ("fact", "view", "dislike", "unsure"):
+            raise PersonaError(f"unknown self kind {kind!r}: {path}")
+        cues = str(entry.get("cues", "")).strip()
+        statement = str(entry.get("say", "")).strip()
+        if not cues or not statement:
+            raise PersonaError(f"a 'self' entry needs both cues and say: {path}")
+        out.append({"kind": kind, "cues": cues, "statement": statement})
+    return tuple(out)
