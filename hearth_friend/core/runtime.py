@@ -369,17 +369,24 @@ class Runtime:
             )
             picked = [usable[i] for i in order]
 
+        # What is formative is always in reach, not competing for a slot. These
+        # are not remembered harder than other things; they are held
+        # differently.
+        held = self.store.formative_memories()
+        picked = [row for row in held] + [
+            row for row in picked if row["id"] not in {h["id"] for h in held}
+        ]
         self.store.touch_memories([row["id"] for row in picked])
         return [
             Memory(
                 row["id"],
                 row["content"],
                 row["cues"],
-                row["event_time"],
-                row["importance"],
-                row["strength"],
-                row["embedding"],
-                row["embedding_model"],
+                row.get("event_time"),
+                row.get("importance", 1.0),
+                row.get("strength", 1.0),
+                row.get("embedding"),
+                row.get("embedding_model"),
             )
             for row in picked
         ]
@@ -445,6 +452,7 @@ class Runtime:
                     entry["cues"],
                     importance=entry["importance"],
                     source_turn_ids=[t.id for t in turns],
+                    formative=entry.get("formative", False),
                 )
                 added += 1
         return added

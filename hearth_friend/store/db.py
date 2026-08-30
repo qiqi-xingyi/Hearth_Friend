@@ -398,11 +398,12 @@ class Store:
         importance: float,
         event_time: str | None = None,
         source_turn_ids: list[int] | None = None,
+        formative: bool = False,
     ) -> int:
         cur = self.conn.execute(
             "INSERT INTO memory (content, cues, event_time, importance, strength,"
-            "                    source_json, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "                    source_json, created_at, formative)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 content,
                 cues,
@@ -411,6 +412,7 @@ class Store:
                 importance,  # starts at its own weight and decays from there
                 json.dumps(source_turn_ids or [], ensure_ascii=False),
                 utcnow(),
+                int(formative),
             ),
         )
         memory_id = int(cur.lastrowid)
@@ -484,6 +486,7 @@ class Store:
             "SELECT id, importance, strength, status,"
             "       COALESCE(last_recalled_at, created_at) AS since"
             "  FROM memory WHERE status IN ('active', 'forgotten')"
+            "   AND formative = 0"
         ).fetchall()
 
         forgotten, revived = [], []
@@ -533,6 +536,14 @@ class Store:
             (*cues, limit),
         ).fetchall()
         return [int(row["id"]) for row in rows]
+
+    def formative_memories(self) -> list[dict[str, Any]]:
+        """What does not fade, and is always in reach."""
+        rows = self.conn.execute(
+            "SELECT id, content, event_time FROM memory"
+            " WHERE formative = 1 AND status != 'superseded' ORDER BY id"
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def touch_memories(self, memory_ids: list[int]) -> None:
         """Recalling something makes it stick a little harder.

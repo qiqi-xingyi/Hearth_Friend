@@ -118,3 +118,47 @@ def test_the_same_evidence_is_not_concluded_from_twice(store, persona):
 
     assert runtime.generalise() == "他最近好像一直很忙"
     assert runtime.generalise() is None, "the same three occasions are spent"
+
+
+# --- what does not fade -----------------------------------------------------
+
+
+def test_who_he_is_never_decays(store):
+    """A friend does not forget your name. Facts about him are not on the decay
+    path at all -- it is a different table, and the pass does not touch it."""
+    store.add_about_you("fact", "奇奇 名字", "他叫奇奇")
+    store.conn.execute(
+        "UPDATE about_you SET created_at = ?", (days_ago(365 * 5),)
+    )
+    store.forget_pass()
+    assert [row["statement"] for row in store.about_you()] == ["他叫奇奇"]
+
+
+def test_what_became_part_of_him_does_not_fade_either(store):
+    """Decay scaled by importance is still decay: at the top of the scale a
+    memory had a half-life of about a year, so given long enough it went too.
+    Who your parents are and the year something broke do not have a half-life."""
+    formative = store.add_memory(
+        "他父亲去世那年他刚上博士", "父亲", importance=0.95, formative=True
+    )
+    ordinary = store.add_memory(
+        "他那次面试搞砸了", "面试", importance=0.9, formative=False
+    )
+    store.conn.execute("UPDATE memory SET created_at = ?", (days_ago(365 * 5),))
+
+    store.forget_pass()
+    statuses = {
+        row["id"]: row["status"]
+        for row in store.conn.execute("SELECT id, status FROM memory")
+    }
+    assert statuses[formative] == "active"
+    assert statuses[ordinary] == "forgotten"
+
+
+def test_what_is_formative_is_always_in_reach_not_competing_for_a_slot(store):
+    store.add_memory("他父亲去世那年", "父亲", importance=0.95, formative=True)
+    for index in range(20):
+        store.add_memory(f"无关小事 {index}", f"小事{index}", importance=0.3)
+
+    held = store.formative_memories()
+    assert [row["content"] for row in held] == ["他父亲去世那年"]

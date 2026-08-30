@@ -155,6 +155,13 @@ _MEMORY_INSTRUCTION = """下面是一段聊天记录。把其中值得记住的�
   「他上周三面试搞砸了，准备了两周」这种
   importance 0 到 1：日常寒暄 0.1–0.2，他在意的事 0.5 以上
 
+  formative true/false —— 这件事是不是**构成他这个人的一部分**，永远不该淡忘：
+    是：父母家人、重大变故、失去、疾病、重要的分别、人生转折、
+        真正的成就、他明确说过对他很重要的事
+    否：其余一切。今天很累、这周论文卡住、喜欢什么口味——
+        这些重要归重要，但不是他之所以是他
+    宁可标 false。标错成 true 的东西会永远留着
+
 两类都要给 cues：会让人想起这条的词，空格分隔，**要短、要具体**
 （写「QB 猫 宠物」，不要写「他的宠物情况」；一两个字的词也要写上）
 
@@ -216,9 +223,12 @@ def extract_memories(
             importance = max(0.0, min(1.0, float(entry.get("importance", 0.3))))
         except (TypeError, ValueError):
             importance = 0.3
-        episodes.append(
-            {"cues": cues[:200], "content": content[:500], "importance": importance}
-        )
+        episodes.append({
+            "cues": cues[:200],
+            "content": content[:500],
+            "importance": importance,
+            "formative": bool(entry.get("formative", False)),
+        })
         if len(episodes) >= MAX_NEW_MEMORIES:
             break
 
