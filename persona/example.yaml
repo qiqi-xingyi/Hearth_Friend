@@ -62,14 +62,20 @@ persona:
   # is where anything she has to say comes from. Change these to whatever you
   # would actually want her to have been reading.
   reads:
+    - name: bilibili 热门
+      kind: bilibili
     - name: BBC 中文
       url: https://feeds.bbci.co.uk/zhongwen/simp/rss.xml
     - name: 少数派
       url: https://sspai.com/feed
-    - name: 阮一峰的网络日志
-      url: http://www.ruanyifeng.com/blog/atom.xml
-    - name: Hacker News
-      url: https://news.ycombinator.com/rss
+    - name: 机核
+      url: https://www.gcores.com/rss
+    - name: V2EX
+      url: https://www.v2ex.com/index.xml
+  # 知乎 and 小红书 are not here because neither has a reachable public feed:
+  # the usual third-party bridge answers 403 and 小红书 blocks outright. An
+  # address that silently returns nothing is worse than an absent one -- it
+  # looks like she is reading when she is not.
 
   # Things that are true about her, and stay true. Cues are the words that
   # should bring an entry to mind; anything not written here she has not

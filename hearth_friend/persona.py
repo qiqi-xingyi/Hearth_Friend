@@ -13,6 +13,8 @@ from pathlib import Path
 
 import yaml
 
+from hearth_friend.world.feeds import KNOWN_SOURCES
+
 
 class PersonaError(ValueError):
     """The persona file is missing or malformed."""
@@ -176,9 +178,13 @@ def _read_sources(raw: object, path: Path) -> tuple[dict, ...]:
             raise PersonaError(f"each 'reads' entry must be a mapping: {path}")
         name = str(entry.get("name", "")).strip()
         url = str(entry.get("url", "")).strip()
-        if not name or not url:
-            raise PersonaError(f"a 'reads' entry needs both name and url: {path}")
-        if not url.startswith(("http://", "https://")):
-            raise PersonaError(f"'reads' url must be http(s): {url}")
-        out.append({"name": name, "url": url})
+        kind = str(entry.get("kind", "rss")).strip() or "rss"
+        if not name:
+            raise PersonaError(f"a 'reads' entry needs a name: {path}")
+        if kind == "rss":
+            if not url.startswith(("http://", "https://")):
+                raise PersonaError(f"'reads' url must be http(s): {url!r} in {path}")
+        elif kind not in KNOWN_SOURCES:
+            raise PersonaError(f"unknown 'reads' kind {kind!r}: {path}")
+        out.append({"name": name, "url": url, "kind": kind})
     return tuple(out)

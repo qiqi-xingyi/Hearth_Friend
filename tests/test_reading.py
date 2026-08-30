@@ -88,3 +88,73 @@ def test_a_persona_that_reads_nothing_makes_no_requests(store, persona, monkeypa
     monkeypatch.setattr(runtime_module, "fetch_source", explode)
     runtime = Runtime(store, None, persona, user_id="local", channel="cli")
     assert runtime.refresh_reading() == 0
+
+
+BILIBILI = """{"data": {"list": [
+  {"bvid": "BV1abc", "title": "标题", "desc": "简介",
+   "owner": {"name": "某UP"}},
+  {"bvid": "", "title": "no id"},
+  {"bvid": "../../etc/passwd", "title": "path traversal attempt"}
+]}}"""
+
+
+def test_a_platform_without_a_feed_is_read_through_a_fixed_endpoint():
+    from hearth_friend.world.feeds import parse_bilibili
+
+    items = parse_bilibili(BILIBILI, "bilibili")
+    assert [i.url for i in items] == ["https://www.bilibili.com/video/BV1abc"]
+    assert items[0].summary == "UP主 某UP：简介"
+
+
+def test_an_id_that_is_not_an_id_cannot_shape_a_url():
+    """Ids come back from a remote service. They are used to build an address,
+    so they are checked rather than trusted."""
+    from hearth_friend.world.feeds import parse_bilibili
+
+    assert all("etc/passwd" not in item.url for item in parse_bilibili(BILIBILI, "b"))
+
+
+def test_an_address_only_ever_comes_from_the_persona_or_the_known_table():
+    """The boundary the whole reading layer rests on: nothing she says and
+    nothing she reads can introduce a host."""
+    import pytest
+
+    from hearth_friend.world.feeds import Source, source_url
+
+    assert source_url(Source("b", kind="bilibili")).startswith("https://api.bilibili.com/")
+    with pytest.raises(ValueError):
+        source_url(Source("x", "file:///etc/passwd"))
+    with pytest.raises(ValueError):
+        source_url(Source("x", "https://ok", kind="something-invented"))
+
+
+def test_a_persona_cannot_name_a_source_kind_that_does_not_exist(tmp_path):
+    import pytest
+
+    from hearth_friend.persona import Persona, PersonaError
+
+    path = tmp_path / "p.yaml"
+    path.write_text(
+        "persona:\n  name: T\n  core: c\n  reads:\n"
+        "    - name: x\n      kind: telepathy\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(PersonaError, match="unknown 'reads' kind"):
+        Persona.load(path)
+
+
+def test_every_source_gets_in_front_of_her(store):
+    """Sources are fetched one after another, so ordering by recency alone
+    hands every slot to whichever was fetched last."""
+    for source in ("a", "b", "c"):
+        for index in range(6):
+            store.add_reading(source, f"https://{source}/{index}", f"{source}{index}", "", "")
+
+    seen = {row["source"] for row in store.recent_reading(limit=9, per_source=3)}
+    assert seen == {"a", "b", "c"}
+
+
+def test_the_same_link_is_not_read_twice(store):
+    assert store.add_reading("s", "https://example.com/1", "t", "", "")
+    assert not store.add_reading("s", "https://example.com/1", "t", "", "")
+    assert len(store.recent_reading()) == 1

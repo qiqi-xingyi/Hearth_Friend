@@ -308,11 +308,21 @@ class Store:
         )
         return cur.rowcount > 0
 
-    def recent_reading(self, limit: int = 12) -> list[dict[str, Any]]:
+    def recent_reading(
+        self, limit: int = 12, per_source: int = 3
+    ) -> list[dict[str, Any]]:
+        """A few from each source, not the newest overall.
+
+        Sources are fetched one after another, so ordering by recency alone
+        hands every slot to whichever was fetched last: five sources went in and
+        only the fifth was ever in front of her.
+        """
         rows = self.conn.execute(
-            "SELECT source, url, title, summary, read_at FROM reading"
-            " ORDER BY id DESC LIMIT ?",
-            (limit,),
+            "SELECT source, url, title, summary, read_at FROM ("
+            "  SELECT *, ROW_NUMBER() OVER ("
+            "    PARTITION BY source ORDER BY id DESC) AS rn FROM reading)"
+            " WHERE rn <= ? ORDER BY rn, id DESC LIMIT ?",
+            (per_source, limit),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -326,7 +336,7 @@ class Store:
         """Everything currently true about her."""
         rows = self.conn.execute(
             "SELECT id, kind, cues, statement FROM self_fact"
-            " WHERE superseded_by IS NULL ORDER BY id"
+            " WHERE superseded_by IS NULL AND retired_at IS NULL ORDER BY id"
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -350,6 +360,12 @@ class Store:
         the record, and is the only way a change in her is ever visible."""
         self.conn.execute(
             "UPDATE self_fact SET superseded_by = ? WHERE id = ?", (new_id, old_id)
+        )
+
+    def retire_self_fact(self, fact_id: int) -> None:
+        """Stop recalling something without pretending it was never true."""
+        self.conn.execute(
+            "UPDATE self_fact SET retired_at = ? WHERE id = ?", (utcnow(), fact_id)
         )
 
     def has_self_statement(self, statement: str) -> bool:

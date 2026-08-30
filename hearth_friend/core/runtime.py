@@ -222,7 +222,8 @@ class Runtime:
 
         seen = 0
         for entry in sources:
-            for item in fetch_source(Source(entry["name"], entry["url"])):
+            source = Source(entry["name"], entry.get("url", ""), entry.get("kind", "rss"))
+            for item in fetch_source(source):
                 if self.store.add_reading(
                     entry["name"], item.url, item.title, item.summary, item.published
                 ):
