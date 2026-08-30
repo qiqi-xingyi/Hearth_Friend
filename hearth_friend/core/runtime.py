@@ -99,7 +99,10 @@ class Runtime:
         for entry in getattr(self.persona, "self_facts", ()):
             if not self.store.has_self_statement(entry["statement"]):
                 self.store.add_self_fact(
-                    entry["kind"], entry["cues"], entry["statement"]
+                    entry["kind"],
+                    entry["cues"],
+                    entry["statement"],
+                    always_on=entry.get("always_on", False),
                 )
                 added += 1
         return added
@@ -200,7 +203,13 @@ class Runtime:
     def remembered_self(self, text: str) -> list[SelfFact]:
         """What this stretch of conversation should bring to her mind."""
         facts = [
-            SelfFact(row["id"], row["kind"], parse_cues(row["cues"]), row["statement"])
+            SelfFact(
+                row["id"],
+                row["kind"],
+                parse_cues(row["cues"]),
+                row["statement"],
+                bool(row["always_on"]),
+            )
             for row in self.store.self_facts()
         ]
         return recall(facts, text)

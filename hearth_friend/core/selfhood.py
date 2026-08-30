@@ -35,6 +35,7 @@ class SelfFact:
     kind: str
     cues: tuple[str, ...]
     statement: str
+    always_on: bool = False
 
     def matches(self, text: str) -> bool:
         return any(cue and cue in text for cue in self.cues)
@@ -50,9 +51,13 @@ def recall(facts: list[SelfFact], text: str, limit: int = MAX_RECALLED) -> list[
     Longer cues first: a hit on "塞尔达" says more about what she is being asked
     than a hit on "游戏" does.
     """
-    hits = [fact for fact in facts if fact.matches(text)]
+    # A boundary has to hold when nothing raised the subject. Asked how she was
+    # doing, she said she felt tired -- which she had recorded that she cannot
+    # be -- because the question mentioned none of that entry's cues.
+    always = [fact for fact in facts if fact.always_on]
+    hits = [fact for fact in facts if not fact.always_on and fact.matches(text)]
     hits.sort(key=lambda f: -max(len(cue) for cue in f.cues if cue in text))
-    return hits[:limit]
+    return always + hits[: max(0, limit - len(always))]
 
 
 def as_prompt_block(facts: list[SelfFact]) -> str:

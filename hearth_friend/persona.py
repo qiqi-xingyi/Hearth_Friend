@@ -161,7 +161,12 @@ def _read_self_facts(raw: object, path: Path) -> tuple[dict, ...]:
         statement = str(entry.get("say", "")).strip()
         if not cues or not statement:
             raise PersonaError(f"a 'self' entry needs both cues and say: {path}")
-        out.append({"kind": kind, "cues": cues, "statement": statement})
+        out.append({
+            "kind": kind,
+            "cues": cues,
+            "statement": statement,
+            "always_on": bool(entry.get("always", False)),
+        })
     return tuple(out)
 
 

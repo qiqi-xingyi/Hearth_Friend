@@ -566,7 +566,7 @@ class Store:
     def self_facts(self) -> list[dict[str, Any]]:
         """Everything currently true about her."""
         rows = self.conn.execute(
-            "SELECT id, kind, cues, statement FROM self_fact"
+            "SELECT id, kind, cues, statement, always_on FROM self_fact"
             " WHERE superseded_by IS NULL AND retired_at IS NULL ORDER BY id"
         ).fetchall()
         return [dict(row) for row in rows]
@@ -578,11 +578,13 @@ class Store:
         statement: str,
         *,
         source_turn_id: int | None = None,
+        always_on: bool = False,
     ) -> int:
         cur = self.conn.execute(
-            "INSERT INTO self_fact (kind, cues, statement, source_turn_id, created_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (kind, cues, statement, source_turn_id, utcnow()),
+            "INSERT INTO self_fact (kind, cues, statement, source_turn_id, created_at,"
+            "                       always_on)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (kind, cues, statement, source_turn_id, utcnow(), int(always_on)),
         )
         return int(cur.lastrowid)
 

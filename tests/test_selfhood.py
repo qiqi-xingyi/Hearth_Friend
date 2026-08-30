@@ -71,3 +71,28 @@ def test_the_shipped_personas_disagree_with_each_other():
     assert {f["statement"] for f in warm.self_facts} != {
         f["statement"] for f in quiet.self_facts
     }
+
+
+def test_a_boundary_holds_when_nothing_raised_it():
+    """Asked how she was doing she said she felt tired, which she had recorded
+    that she cannot be. The entry's cues were 身体 累 困 饿; the question was
+    你状态怎么样, which matches none of them. Cue-triggered recall can only fire
+    on what is in front of it, and a boundary has to hold anyway."""
+    boundary = SelfFact(
+        9, "fact", parse_cues("身体 累 困 饿"), "我没有身体，累和饿这些我没有", True
+    )
+    recalled = recall(FACTS + [boundary], "今天你状态怎么样")
+    assert boundary in recalled
+
+
+def test_an_always_on_entry_does_not_crowd_out_everything_else():
+    boundary = SelfFact(9, "fact", parse_cues("身体"), "我没有身体", True)
+    recalled = recall(FACTS + [boundary], "聊聊灵感这回事")
+    assert boundary in recalled
+    assert any(f.id == 2 for f in recalled), "the cued entry still gets in"
+
+
+def test_the_shipped_persona_marks_its_boundary_as_always_on():
+    loaded = Persona.load("persona/example.yaml")
+    always = [f for f in loaded.self_facts if f.get("always_on")]
+    assert always, "the one thing she must never claim has to be in front of her"

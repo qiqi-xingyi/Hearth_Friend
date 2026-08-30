@@ -128,6 +128,11 @@ def cmd_chat(config: Config) -> int:
     last_spoke = 0.0
     stop = threading.Event()
 
+    def note(text: str) -> None:
+        """Background chatter. Raw ANSI does not survive patch_stdout -- the
+        escape codes end up on screen as text."""
+        print_formatted_text(FormattedText([("#808080", text)]))
+
     def say(message: str) -> None:
         # Raw ANSI does not survive patch_stdout; prompt_toolkit has to do the
         # styling or the escape codes end up on screen as text.
@@ -146,23 +151,23 @@ def cmd_chat(config: Config) -> int:
                 runtime.embedding.load()
                 vectorised = runtime.catch_up_embeddings()
                 if vectorised:
-                    print(_style(f"[took in {vectorised} things]", DIM))
+                    note(f"[took in {vectorised} things]")
             except Exception as exc:
-                print(_style(f"[no embedding model: {exc}]", DIM))
+                note(f"[no embedding model: {exc}]")
                 runtime.embedding = None
         try:
             seen = runtime.refresh_reading()
             if seen:
-                print(_style(f"[read {seen} new things]", DIM))
+                note(f"[read {seen} new things]")
         except Unreachable:
-            print(_style("[could not reach anything to read]", DIM))
+            note("[could not reach anything to read]")
         except Exception:
             pass
         try:
             learned = runtime.catch_up_extraction()
             runtime.catch_up_embeddings()
             if learned:
-                print(_style(f"[settled {learned} more things about herself]", DIM))
+                note(f"[settled {learned} more things about herself]")
         except Exception:
             pass
         while not stop.wait(0.2):
@@ -182,9 +187,9 @@ def cmd_chat(config: Config) -> int:
                         time.sleep(persona.message_style.pause_seconds)
                     say(message)
             except ProviderError as exc:
-                print(_style(f"[provider error: {exc}]", DIM), file=sys.stderr)
+                note(f"[provider error: {exc}]")
             except Exception as exc:  # keep the conversation alive
-                print(_style(f"[error: {exc}]", DIM), file=sys.stderr)
+                note(f"[error: {exc}]")
             finally:
                 last_spoke = time.monotonic()
 
