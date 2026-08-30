@@ -158,3 +158,56 @@ def test_a_provider_failure_does_not_take_the_conversation_down():
     conversation.heard("在吗")
     assert conversation.speak_once() == 0
     assert problems == ["provider is down"]
+
+
+# --- looking ----------------------------------------------------------------
+
+
+def test_a_photograph_becomes_words_before_it_enters_the_conversation():
+    """What she saw is written into the log as text, so it is remembered,
+    recalled and forgotten like anything else that was said -- rather than
+    being a URL that expires."""
+    from hearth_friend.adapters.qq import read_message
+
+    read = read_message(
+        {"message": [
+            {"type": "image", "data": {"url": "http://x/1.jpg", "sub_type": "0"}},
+            {"type": "text", "data": {"text": " 这是QB"}},
+        ]},
+        describe=lambda url: "一只黑白花猫趴在竹床边",
+    )
+    assert "[他发了张图：一只黑白花猫趴在竹床边]" in read
+    assert "这是QB" in read
+
+
+def test_not_being_able_to_look_is_said_rather_than_hidden():
+    from hearth_friend.adapters.qq import read_message
+
+    read = read_message(
+        {"message": [{"type": "image", "data": {"url": "http://x/1.jpg", "sub_type": "0"}}]},
+        describe=lambda url: None,
+    )
+    assert "看不到内容" in read
+
+
+def test_a_sticker_is_not_sent_to_be_looked_at():
+    """It already says what it is, and looking costs a call."""
+    from hearth_friend.adapters.qq import read_message
+
+    looked = []
+    read_message(
+        {"message": [{"type": "image", "data": {"summary": "[开心]", "sub_type": "1"}}]},
+        describe=lambda url: looked.append(url),
+    )
+    assert looked == []
+
+
+def test_an_image_with_no_address_is_not_fetched():
+    from hearth_friend.adapters.qq import read_message
+
+    def explode(url):
+        raise AssertionError("should not have tried to fetch")
+
+    assert "看不到内容" in read_message(
+        {"message": [{"type": "image", "data": {"sub_type": "0"}}]}, describe=explode
+    )

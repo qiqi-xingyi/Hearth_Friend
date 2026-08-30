@@ -26,7 +26,11 @@ class ModelProvider(Protocol):
     model_id: str
 
     def generate(
-        self, messages: Sequence[Message], *, temperature: float | None = None
+        self,
+        messages: Sequence[Message],
+        *,
+        temperature: float | None = None,
+        model: str | None = None,
     ) -> str: ...
 
     def stream(

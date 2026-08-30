@@ -36,11 +36,17 @@ class DeepSeekProvider:
         self.model_id = model
 
     def generate(
-        self, messages: Sequence[Message], *, temperature: float | None = None
+        self,
+        messages: Sequence[Message],
+        *,
+        temperature: float | None = None,
+        model: str | None = None,
     ) -> str:
+        """`model` overrides for a single call -- looking at a picture needs a
+        different one, and only for that turn."""
         try:
             response = self._client.chat.completions.create(
-                model=self.model_id,
+                model=model or self.model_id,
                 messages=list(messages),
                 temperature=temperature,
             )

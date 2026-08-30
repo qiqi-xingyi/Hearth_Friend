@@ -138,6 +138,7 @@ environment variables always win over the file.
 | `HEARTH_SETTLE_SECONDS` | `2.0` | how long she waits for you to finish |
 | `HEARTH_TEMPERATURE` | `1.0` | |
 | `HEARTH_EMBEDDING_MODEL` | `BAAI/bge-m3` | local; `off` falls back to keyword matching |
+| `HEARTH_VISION_MODEL` | `deepseek-v4-flash-vision-exp` | only on turns with a picture; `off` to disable |
 | `HEARTH_USER_ID` | `local` | history is keyed by this, not by persona |
 | `HEARTH_REQUEST_TIMEOUT` | `60` | seconds |
 

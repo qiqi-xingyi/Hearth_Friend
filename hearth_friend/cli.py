@@ -166,7 +166,21 @@ def cmd_serve(config: Config) -> int:
         pause_seconds=persona.message_style.pause_seconds,
         on_error=note,
     )
-    adapter = QQAdapter(conversation, config.qq_ws_url, config.qq_user_id, config.qq_token)
+    def look(url: str) -> str | None:
+        """One extra call, on the turn a picture arrives in and no other."""
+        if not config.vision_model or config.vision_model.lower() in ("off", "none"):
+            return None
+        from hearth_friend.providers.vision import describe
+
+        return describe(runtime.provider, url, model=config.vision_model)
+
+    adapter = QQAdapter(
+        conversation,
+        config.qq_ws_url,
+        config.qq_user_id,
+        config.qq_token,
+        describe=look,
+    )
 
     note(f"{persona.name} · {config.model} · {store.stats(config.user_id)['turns']} turns")
     note(f"connecting to {config.qq_ws_url}")

@@ -56,6 +56,7 @@ class Config:
     qq_ws_url: str
     qq_user_id: int
     qq_token: str
+    vision_model: str
 
     @classmethod
     def from_env(cls, *, load_dotenv: bool = True) -> "Config":
@@ -91,4 +92,7 @@ class Config:
             qq_ws_url=_get("QQ_WS_URL", "ws://127.0.0.1:3001"),
             qq_user_id=int(_get("QQ_USER_ID", "0") or 0),
             qq_token=_get("QQ_TOKEN", ""),
+            # Only used for the turn a picture arrives in. "off" means she says
+            # she cannot see it, which is what she did before this existed.
+            vision_model=_get("VISION_MODEL", "deepseek-v4-flash-vision-exp"),
         )

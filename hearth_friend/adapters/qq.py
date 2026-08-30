@@ -62,7 +62,7 @@ QQ_FACES = {
 }
 
 
-def read_message(event: dict) -> str:
+def read_message(event: dict, describe: Callable[[str], str | None] | None = None) -> str:
     """What arrived, as something she can read.
 
     Four kinds of thing come down this wire and they are not the same:
@@ -98,12 +98,17 @@ def read_message(event: dict) -> str:
         elif kind == "image":
             # Stickers carry their own label; photographs do not.
             summary = str(data.get("summary") or "").strip().strip("[]")
+            url = str(data.get("url") or data.get("file") or "")
             if summary:
                 parts.append(f"[表情包：{summary}]")
             elif str(data.get("sub_type") or "") not in ("0", ""):
                 parts.append("[表情包]")
             else:
-                parts.append("[他发了一张图片，你看不到内容]")
+                seen = describe(url) if (describe and url) else None
+                parts.append(
+                    f"[他发了张图：{seen}]" if seen
+                    else "[他发了一张图片，你看不到内容]"
+                )
         elif kind in ("record", "video"):
             parts.append(f"[他发了一段{'语音' if kind == 'record' else '视频'}，你听不到／看不到]")
 
@@ -117,8 +122,16 @@ extract_text = read_message
 class QQAdapter:
     name = "qq"
 
-    def __init__(self, conversation, ws_url: str, user_id: int, token: str = ""):
+    def __init__(
+        self,
+        conversation,
+        ws_url: str,
+        user_id: int,
+        token: str = "",
+        describe: Callable[[str], str | None] | None = None,
+    ):
         self.conversation = conversation
+        self.describe = describe
         self.ws_url = ws_url
         self.user_id = int(user_id)
         self.token = token
@@ -137,7 +150,7 @@ class QQAdapter:
         # Only him. Anyone else is not read at all.
         if int(event.get("user_id", 0)) != self.user_id:
             return
-        text = extract_text(event)
+        text = read_message(event, self.describe)
         if text:
             self.conversation.heard(text)
 
