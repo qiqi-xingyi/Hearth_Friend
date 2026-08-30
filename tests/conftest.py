@@ -10,25 +10,27 @@ from hearth_friend.store import Store
 
 
 class StubProvider:
-    """A provider that returns scripted output, so the deterministic layer can be
-    tested without a network call."""
+    """A provider that returns scripted output, so the deterministic layer can
+    be tested without a network call.
 
-    def __init__(self, pieces: Sequence[str] = ("hi",), fail_after: int | None = None):
+    Each entry in `messages` becomes one of her messages: the runtime splits on
+    newlines, so the stub joins with them.
+    """
+
+    def __init__(self, messages: Sequence[str] = ("hi",), fail: bool = False):
         self.model_id = "stub"
-        self.pieces = list(pieces)
-        self.fail_after = fail_after
+        self.messages = list(messages)
+        self.fail = fail
         self.calls: list[list[Message]] = []
 
     def generate(self, messages, *, temperature=None) -> str:
         self.calls.append(list(messages))
-        return "".join(self.pieces)
+        if self.fail:
+            raise ProviderError("stub failure")
+        return "\n".join(self.messages)
 
     def stream(self, messages, *, temperature=None) -> Iterator[str]:
-        self.calls.append(list(messages))
-        for index, piece in enumerate(self.pieces):
-            if self.fail_after is not None and index >= self.fail_after:
-                raise ProviderError("stub failure")
-            yield piece
+        yield self.generate(messages, temperature=temperature)
 
 
 @pytest.fixture

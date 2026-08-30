@@ -1,12 +1,16 @@
 """The conversation loop.
 
-Two properties matter here and both are about the turn log:
+Not request-response. Messages arrive on a shared timeline: you can send three
+in a row without waiting, and what she says back is a run of messages rather
+than one block of text. A reply answers everything that is currently unanswered,
+not the single line that triggered it.
 
-1. The user's message is persisted *before* the model is called, so a crash or a
-   provider failure never loses something the user actually said.
-2. Context is read back out of the database rather than held in memory. There is
-   no in-process conversation state to lose, which is what makes restarting the
-   process resume the conversation rather than reset it.
+Two properties are about the turn log:
+
+1. What you say is persisted the moment it arrives, before any model is called,
+   so a provider failure or a crash never loses it.
+2. Context is read back out of the database rather than held in memory, so
+   restarting resumes the conversation instead of resetting it.
 """
 
 from __future__ import annotations
@@ -14,11 +18,10 @@ from __future__ import annotations
 from typing import Iterator, Sequence
 
 from hearth_friend.core.perception import Perception, perceive
-from hearth_friend.core.prompt import state_note, system_prompt
+from hearth_friend.core.prompt import split_messages, state_note, system_prompt
 from hearth_friend.core.state import State, after_perceiving, decayed, hours_since
-from hearth_friend.persona import Persona
 from hearth_friend.providers.base import Message, ModelProvider, ProviderError
-from hearth_friend.store import Store
+from hearth_friend.store import Store, Turn
 
 
 class Runtime:
@@ -26,7 +29,7 @@ class Runtime:
         self,
         store: Store,
         provider: ModelProvider,
-        persona: Persona,
+        persona,
         *,
         user_id: str,
         channel: str,
@@ -41,8 +44,8 @@ class Runtime:
         self.channel = channel
         self.context_turns = context_turns
         self.temperature = temperature
-        self.session_id: int | None = None
         self.perceive_enabled = perceive_enabled
+        self.session_id: int | None = None
 
     # --------------------------------------------------------------- session
 
@@ -67,7 +70,7 @@ class Runtime:
     def build_messages(
         self, state: State | None = None, perception: Perception | None = None
     ) -> list[Message]:
-        """Stable persona, then history, then how she is right now.
+        """Stable persona, then history, then what she may do this turn.
 
         The ordering is deliberate. Everything before the last block is
         append-only and therefore cacheable, which on this provider is roughly a
@@ -84,6 +87,27 @@ class Runtime:
             )
         return messages
 
+    # ---------------------------------------------------------------- taking in
+
+    def ingest(self, text: str) -> int:
+        """Record something you said. Does not reply, and does not block.
+
+        Separating this from replying is what lets you keep talking while she is
+        still deciding what to say.
+        """
+        if self.session_id is None:
+            self.start_session()
+        assert self.session_id is not None
+        return self.store.append_turn(self.session_id, "user", text)
+
+    def unanswered(self) -> list[Turn]:
+        """Your messages she has not answered yet.
+
+        Not "everything since she last spoke": a message sent while she is
+        composing lands before her reply does, and she never saw it.
+        """
+        return self.store.unanswered_turns(self.user_id, self.context_turns)
+
     # ---------------------------------------------------------------- feeling
 
     def current_state(self) -> State:
@@ -94,70 +118,70 @@ class Runtime:
         state = State(**stored)
         return decayed(state, self.persona, hours=hours_since(state.updated_at))
 
-    def _register(self, turn_id: int, text: str) -> tuple[State, Perception | None]:
-        """Read the message, let it move her, and keep both."""
+    def _register(self, turns: Sequence[Turn]) -> tuple[State, Perception | None]:
+        """Read the whole burst at once and let it move her.
+
+        One read per burst rather than per message: it is cheaper, and a run of
+        messages usually only means one thing.
+        """
         perception: Perception | None = None
-        if self.perceive_enabled:
-            recent = [t.content for t in self.store.recent_turns(self.user_id, 5)[:-1]]
-            perception = perceive(self.provider, text, recent=recent)
-            self.store.save_perception(turn_id, perception)
+        if self.perceive_enabled and turns:
+            burst = "\n".join(t.content for t in turns)
+            earlier = [
+                t.content
+                for t in self.store.recent_turns(self.user_id, self.context_turns)
+                if t.id < turns[0].id
+            ][-4:]
+            perception = perceive(self.provider, burst, recent=earlier)
+            self.store.save_perception(turns[-1].id, perception)
 
         state = self.current_state()
         if perception is not None:
             state = after_perceiving(state, perception, self.persona)
-        self.store.save_state(self.user_id, {
-            "mood_valence": state.mood_valence,
-            "mood_arousal": state.mood_arousal,
-            "energy": state.energy,
-            "engagement": state.engagement,
-            "focus": state.focus,
-        })
+        self.store.save_state(
+            self.user_id,
+            {
+                "mood_valence": state.mood_valence,
+                "mood_arousal": state.mood_arousal,
+                "energy": state.energy,
+                "engagement": state.engagement,
+                "focus": state.focus,
+            },
+        )
         return state, perception
 
     # -------------------------------------------------------------- speaking
 
-    def respond(self, user_text: str) -> Iterator[str]:
-        """Persist the user's message, then stream a reply and persist that too."""
+    def reply(self) -> Iterator[str]:
+        """Answer everything unanswered, as a run of messages.
+
+        Not streamed. A person sends whole messages, not a character at a time,
+        and the whole text is needed before it can be split the way she splits
+        things.
+        """
+        pending = self.unanswered()
+        if not pending:
+            return
         if self.session_id is None:
             self.start_session()
         assert self.session_id is not None
 
-        turn_id = self.store.append_turn(self.session_id, "user", user_text)
-        # Read context back after the write, so the message just stored is the
-        # last thing in the window and there is exactly one path to context.
-        state, perception = self._register(turn_id, user_text)
-        return self._stream_and_persist(self.build_messages(state, perception))
-
-    def _stream_and_persist(self, messages: Sequence[Message]) -> Iterator[str]:
-        assert self.session_id is not None
-        pieces: list[str] = []
+        state, perception = self._register(pending)
         try:
-            for piece in self.provider.stream(messages, temperature=self.temperature):
-                pieces.append(piece)
-                yield piece
-        except GeneratorExit:
-            # The reader stopped early (Ctrl-C at the prompt). Whatever was
-            # already printed was seen, so it is part of the conversation.
-            if pieces:
-                self.store.append_turn(
-                    self.session_id,
-                    "assistant",
-                    "".join(pieces),
-                    meta={"interrupted": True},
-                )
+            text = self.provider.generate(
+                self.build_messages(state, perception), temperature=self.temperature
+            )
+        except ProviderError:
             raise
-        except ProviderError as exc:
-            # A partial reply was still shown to the user, so it happened and is
-            # recorded. The turn log describes the conversation, not the
-            # intention.
-            if pieces:
-                self.store.append_turn(
-                    self.session_id,
-                    "assistant",
-                    "".join(pieces),
-                    meta={"truncated": True, "error": str(exc)},
-                )
-            raise
-        text = "".join(pieces)
-        if text.strip():
-            self.store.append_turn(self.session_id, "assistant", text)
+
+        answers_through = pending[-1].id
+        for message in split_messages(text, self.persona.message_style):
+            self.store.append_turn(
+                self.session_id, "assistant", message, answers_through=answers_through
+            )
+            yield message
+
+    def respond(self, text: str) -> Iterator[str]:
+        """Say one thing and get the answer. A convenience over ingest + reply."""
+        self.ingest(text)
+        return self.reply()

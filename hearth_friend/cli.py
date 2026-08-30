@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
+import time
 
 from hearth_friend import __version__
 from hearth_friend.config import Config
@@ -60,6 +62,13 @@ def cmd_backup(config: Config, destination: str) -> int:
 
 
 def cmd_chat(config: Config) -> int:
+    """Talk to her.
+
+    Not a question-and-answer loop. What you type is recorded immediately and
+    she answers when you seem to have stopped, so you can send three lines in a
+    row the way you would to anyone else. She replies on another thread, which
+    means her messages can land while you are still typing.
+    """
     try:
         persona = Persona.load(config.persona_path)
     except PersonaError as exc:
@@ -71,10 +80,8 @@ def cmd_chat(config: Config) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    try:  # line editing and history, when the platform has it
-        import readline  # noqa: F401
-    except ImportError:
-        pass
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.patch_stdout import patch_stdout
 
     store = Store(config.db_path)
     stats = store.stats(config.user_id)
@@ -95,36 +102,52 @@ def cmd_chat(config: Config) -> int:
         context_turns=config.context_turns,
         temperature=config.temperature,
     )
-    speaker = _style(f"{persona.name}", BOLD)
 
-    with runtime:
-        while True:
-            try:
-                line = input(_style("> ", DIM))
-            except (EOFError, KeyboardInterrupt):
-                print()
-                break
-            line = line.strip()
-            if not line:
-                continue
-            if line in ("/exit", "/quit"):
-                break
-            if line == "/status":
-                print(_style(str(store.stats(config.user_id)), DIM))
-                continue
+    speaker = _style(persona.name, BOLD)
+    last_input = time.monotonic()
+    stop = threading.Event()
 
-            print(f"{speaker}  ", end="", flush=True)
-            stream = runtime.respond(line)
+    def speaking() -> None:
+        while not stop.wait(0.2):
+            if not runtime.unanswered():
+                continue
+            if time.monotonic() - last_input < config.settle_seconds:
+                continue
             try:
-                for piece in stream:
-                    print(piece, end="", flush=True)
-                print("\n")
-            except KeyboardInterrupt:
-                stream.close()  # persists whatever was already shown
-                print(_style("\n[interrupted]\n", DIM))
+                for index, message in enumerate(runtime.reply()):
+                    if index:
+                        time.sleep(persona.message_style.pause_seconds)
+                    print(f"{speaker}  {message}")
             except ProviderError as exc:
-                stream.close()
-                print(_style(f"\n[provider error: {exc}]\n", DIM), file=sys.stderr)
+                print(_style(f"[provider error: {exc}]", DIM), file=sys.stderr)
+            except Exception as exc:  # keep the conversation alive
+                print(_style(f"[error: {exc}]", DIM), file=sys.stderr)
+
+    session = PromptSession()
+    with runtime:
+        thread = threading.Thread(target=speaking, name="speaking", daemon=True)
+        thread.start()
+        try:
+            with patch_stdout():
+                while True:
+                    try:
+                        line = session.prompt("> ")
+                    except (EOFError, KeyboardInterrupt):
+                        print()
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line in ("/exit", "/quit"):
+                        break
+                    if line == "/status":
+                        print(_style(str(store.stats(config.user_id)), DIM))
+                        continue
+                    runtime.ingest(line)
+                    last_input = time.monotonic()
+        finally:
+            stop.set()
+            thread.join(timeout=config.request_timeout + 5)
 
     store.close()
     return 0

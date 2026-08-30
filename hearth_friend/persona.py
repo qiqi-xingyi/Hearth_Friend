@@ -54,6 +54,43 @@ class Traits:
 
 
 @dataclass(frozen=True)
+class MessageStyle:
+    """How she breaks what she says into messages.
+
+    Rhythm is part of a person. Someone who fires off five short lines and
+    someone who writes one considered paragraph are recognisably different
+    people before you read a word of it, and a runtime that always emits
+    exactly one message per turn has flattened that away.
+    """
+
+    # Roughly how many messages one reply becomes.
+    messages_per_reply: float = 2.0
+    # Roughly how long each one runs, in characters.
+    chars_per_message: int = 30
+    # Seconds between them, as if she were typing.
+    pause_seconds: float = 1.2
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> "MessageStyle":
+        data = data or {}
+        try:
+            style = cls(
+                messages_per_reply=float(data.get("messages_per_reply", 2.0)),
+                chars_per_message=int(data.get("chars_per_message", 30)),
+                pause_seconds=float(data.get("pause_seconds", 1.2)),
+            )
+        except (TypeError, ValueError) as exc:
+            raise PersonaError(f"message_style must be numbers: {exc}") from exc
+        if not 1.0 <= style.messages_per_reply <= 8.0:
+            raise PersonaError("messages_per_reply must be between 1 and 8")
+        if not 4 <= style.chars_per_message <= 400:
+            raise PersonaError("chars_per_message must be between 4 and 400")
+        if not 0.0 <= style.pause_seconds <= 10.0:
+            raise PersonaError("pause_seconds must be between 0 and 10")
+        return style
+
+
+@dataclass(frozen=True)
 class Persona:
     name: str
     core: str
@@ -61,6 +98,7 @@ class Persona:
     self_disclosure: str = ""
     boundaries: tuple[str, ...] = field(default_factory=tuple)
     traits: Traits = field(default_factory=Traits)
+    message_style: MessageStyle = field(default_factory=MessageStyle)
     source_path: Path | None = None
 
     @classmethod
@@ -95,5 +133,6 @@ class Persona:
             self_disclosure=str(data.get("self_disclosure") or "").strip(),
             boundaries=tuple(str(b).strip() for b in boundaries if str(b).strip()),
             traits=Traits.from_dict(data.get("traits")),
+            message_style=MessageStyle.from_dict(data.get("message_style")),
             source_path=path,
         )

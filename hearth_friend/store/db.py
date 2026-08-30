@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,20 +45,38 @@ class Store:
         self.path = Path(path)
         if self.path.parent != Path(""):
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        # isolation_level=None puts the driver in autocommit mode so that
-        # transactions are managed explicitly here rather than implicitly.
-        self.conn = sqlite3.connect(str(self.path), isolation_level=None)
-        self.conn.row_factory = sqlite3.Row
-        self._configure()
+        # One connection per thread rather than one shared behind a lock.
+        # Reading you in and answering you happen on different threads, because
+        # you have to be able to keep talking while she is still composing.
+        # SQLite in WAL mode handles that between connections; sharing a single
+        # connection across threads is what it will not do.
+        self._local = threading.local()
+        self._connections: list[sqlite3.Connection] = []
         self.applied_migrations = self.migrate()
 
-    def _configure(self) -> None:
+    @property
+    def conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            # isolation_level=None puts the driver in autocommit mode so that
+            # transactions are managed explicitly here rather than implicitly.
+            conn = sqlite3.connect(str(self.path), isolation_level=None)
+            conn.row_factory = sqlite3.Row
+            self._configure(conn)
+            self._local.conn = conn
+            self._connections.append(conn)
+        return conn
+
+    @staticmethod
+    def _configure(conn: sqlite3.Connection) -> None:
         # WAL from the start: a scheduler will share this file soon enough, and
         # switching later means a moment where the database is not readable.
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA foreign_keys=ON")
-        self.conn.execute("PRAGMA busy_timeout=5000")
-        self.conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        # Long enough that a writer waiting on another writer waits instead of
+        # failing; short enough that a genuine deadlock still surfaces.
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA synchronous=NORMAL")
 
     # ---------------------------------------------------------------- schema
 
@@ -128,10 +147,12 @@ class Store:
         *,
         channel_msg_id: str | None = None,
         meta: dict[str, Any] | None = None,
+        answers_through: int | None = None,
     ) -> int:
         cur = self.conn.execute(
-            "INSERT INTO turn (session_id, role, content, created_at, channel_msg_id, meta_json)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO turn (session_id, role, content, created_at, channel_msg_id,"
+            "                  meta_json, answers_through)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 session_id,
                 role,
@@ -139,9 +160,31 @@ class Store:
                 utcnow(),
                 channel_msg_id,
                 json.dumps(meta, ensure_ascii=False) if meta else None,
+                answers_through,
             ),
         )
         return int(cur.lastrowid)
+
+    def answered_through(self, user_id: str) -> int:
+        """The last message of yours she has actually read and answered."""
+        row = self.conn.execute(
+            "SELECT MAX(t.answers_through) AS n FROM turn t"
+            "  JOIN session s ON s.id = t.session_id"
+            " WHERE s.user_id = ? AND t.role = 'assistant'",
+            (user_id,),
+        ).fetchone()
+        return int(row["n"] or 0)
+
+    def unanswered_turns(self, user_id: str, limit: int) -> list[Turn]:
+        """Your messages she has not got to yet, oldest first."""
+        rows = self.conn.execute(
+            "SELECT t.id, t.session_id, t.role, t.content, t.created_at"
+            "  FROM turn t JOIN session s ON s.id = t.session_id"
+            " WHERE s.user_id = ? AND t.role = 'user' AND t.id > ?"
+            " ORDER BY t.id LIMIT ?",
+            (user_id, self.answered_through(user_id), limit),
+        ).fetchall()
+        return [Turn(**dict(row)) for row in rows]
 
     def recent_turns(self, user_id: str, limit: int) -> list[Turn]:
         """The most recent turns for a user, oldest first.
@@ -261,7 +304,13 @@ class Store:
             self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except sqlite3.Error:
             pass
-        self.conn.close()
+        for conn in self._connections:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+        self._connections.clear()
+        self._local = threading.local()
 
     def __enter__(self) -> "Store":
         return self

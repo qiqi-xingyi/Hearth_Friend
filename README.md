@@ -49,6 +49,10 @@ Xiaoman · deepseek-v4-flash · 0 turns so far   (/exit to leave)
 >
 ```
 
+You do not have to wait for her. Send as many lines as you like; she answers
+once you have stopped for a moment, and her reply arrives as a run of messages
+rather than one block. Her messages can land while you are still typing.
+
 In-chat commands: `/exit`, `/quit`, `/status`.
 
 `hearth status` shows what is in the database:
@@ -72,6 +76,10 @@ persona:
   name: Xiaoman
   core: |                 # background, values, how she sees herself
   language_register: |    # how she talks
+  traits:                 # numbers the runtime reads: warmth, volatility,
+                          # curiosity, expressiveness, baseline_mood
+  message_style:          # how she breaks a reply into messages, and the
+                          # pauses between them
   self_disclosure: |      # her stance when asked whether she is an AI
   boundaries:             # things she must never claim
     - ...
@@ -100,6 +108,7 @@ environment variables always win over the file.
 | `HEARTH_PERSONA` | `persona/example.yaml` | |
 | `HEARTH_DB_PATH` | `data/hearth.db` | |
 | `HEARTH_CONTEXT_TURNS` | `40` | past turns replayed as context |
+| `HEARTH_SETTLE_SECONDS` | `2.0` | how long she waits for you to finish |
 | `HEARTH_TEMPERATURE` | `1.0` | |
 | `HEARTH_USER_ID` | `local` | history is keyed by this, not by persona |
 | `HEARTH_REQUEST_TIMEOUT` | `60` | seconds |

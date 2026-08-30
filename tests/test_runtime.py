@@ -27,20 +27,24 @@ def spoken(messages) -> list[str]:
     return [m["content"] for m in messages if m["role"] != "system"]
 
 
-def test_reply_is_streamed_and_both_turns_persisted(store, persona):
-    runtime = build(store, persona, StubProvider(["he", "llo"]))
+def test_a_reply_is_a_run_of_messages_not_one_block(store, persona):
+    """How someone breaks up what they say is part of who they are, so a reply
+    is several messages and each is recorded as its own turn."""
+    runtime = build(store, persona, StubProvider(["hey", "just got in", "you up?"]))
     with runtime:
-        assert "".join(runtime.respond("are you there")) == "hello"
+        assert list(runtime.respond("are you there")) == ["hey", "just got in", "you up?"]
 
     rows = store.conn.execute("SELECT role, content FROM turn ORDER BY id").fetchall()
     assert [(r["role"], r["content"]) for r in rows] == [
         ("user", "are you there"),
-        ("assistant", "hello"),
+        ("assistant", "hey"),
+        ("assistant", "just got in"),
+        ("assistant", "you up?"),
     ]
 
 
 def test_user_turn_survives_a_provider_failure(store, persona):
-    runtime = build(store, persona, StubProvider(["x"], fail_after=0))
+    runtime = build(store, persona, StubProvider(["x"], fail=True))
     with runtime:
         with pytest.raises(ProviderError):
             list(runtime.respond("this must not be lost"))
@@ -49,31 +53,23 @@ def test_user_turn_survives_a_provider_failure(store, persona):
     assert [(r["role"], r["content"]) for r in rows] == [("user", "this must not be lost")]
 
 
-def test_partial_reply_is_kept_when_the_provider_dies_midway(store, persona):
-    runtime = build(store, persona, StubProvider(["half ", "a sentence"], fail_after=1))
-    with runtime:
-        with pytest.raises(ProviderError):
-            list(runtime.respond("say something"))
-
-    row = store.conn.execute(
-        "SELECT content, meta_json FROM turn WHERE role = 'assistant'"
-    ).fetchone()
-    assert row["content"] == "half "
-    assert json.loads(row["meta_json"])["truncated"] is True
-
-
-def test_partial_reply_is_kept_when_the_reader_stops(store, persona):
+def test_messages_already_sent_are_kept_when_the_reader_stops(store, persona):
+    """She sends a run of messages with pauses between them. If the reader walks
+    away halfway through, what was already sent still happened."""
     runtime = build(store, persona, StubProvider(["one", "two", "three"]))
     with runtime:
-        stream = runtime.respond("count to three")
+        stream = runtime.reply.__self__.respond("say three things")
         assert next(stream) == "one"
+        assert next(stream) == "two"
         stream.close()
 
-    row = store.conn.execute(
-        "SELECT content, meta_json FROM turn WHERE role = 'assistant'"
-    ).fetchone()
-    assert row["content"] == "one"
-    assert json.loads(row["meta_json"])["interrupted"] is True
+    sent = [
+        r["content"]
+        for r in store.conn.execute(
+            "SELECT content FROM turn WHERE role = 'assistant' ORDER BY id"
+        )
+    ]
+    assert sent == ["one", "two"]
 
 
 def test_context_is_persona_plus_history(store, persona):
@@ -126,17 +122,18 @@ def test_context_window_is_respected(store, persona):
 # --- Chinese, which is what this is actually used in ------------------------
 
 
-def test_chinese_survives_streaming_and_storage(store, chinese_persona):
-    """Multi-byte text must reassemble from chunks and store byte-identical."""
-    reply = ["我下周", "也有面试", "，一起紧张"]
-    runtime = build(store, chinese_persona, StubProvider(reply))
+def test_chinese_survives_splitting_and_storage(store, chinese_persona):
+    """Multi-byte text must come back byte-identical after being split into
+    messages and written to the database."""
+    said = ["我下周也有面试", "一起紧张吧", "别熬太晚"]
+    runtime = build(store, chinese_persona, StubProvider(said))
     with runtime:
-        assert "".join(runtime.respond("我下周三面试")) == "".join(reply)
+        assert list(runtime.respond("我下周三面试")) == said
 
     rows = store.conn.execute("SELECT role, content FROM turn ORDER BY id").fetchall()
     assert [(r["role"], r["content"]) for r in rows] == [
         ("user", "我下周三面试"),
-        ("assistant", "我下周也有面试，一起紧张"),
+        *[("assistant", m) for m in said],
     ]
 
 
@@ -164,8 +161,8 @@ def test_how_she_is_goes_last_not_into_the_system_prompt(store, persona):
 
     messages = provider.calls[-1]
     assert messages[-1]["role"] == "system"
-    assert "你此刻的状态" in messages[-1]["content"]
-    assert "你此刻的状态" not in messages[0]["content"]
+    assert "这一轮怎么说" in messages[-1]["content"]
+    assert "这一轮怎么说" not in messages[0]["content"]
 
 
 def test_state_persists_across_a_restart(tmp_path, persona):
@@ -193,3 +190,112 @@ def test_a_flat_mood_and_a_lively_one_produce_different_instructions(store, pers
     assert state_note(withdrawn, None, persona) != state_note(engaged, None, persona)
     assert "没太投入" in state_note(withdrawn, None, persona)
     assert "真的有兴趣" in state_note(engaged, None, persona)
+
+
+def test_she_is_never_handed_words_for_how_she_feels(persona):
+    """An earlier version described her mood in the prompt and she read it out
+    loud. The block gives instructions now, not something to recite."""
+    from hearth_friend.core.prompt import state_note
+    from hearth_friend.core.state import State
+
+    note = state_note(State(mood_valence=-0.8, energy=0.2, engagement=0.05), None, persona)
+    assert "心情不太好" not in note
+    assert "不用为了对方强撑着轻松" in note
+
+
+# --- a shared timeline rather than question and answer ----------------------
+
+
+def test_a_burst_gets_one_reply_covering_all_of_it(store, persona):
+    """You can keep talking without waiting. Three lines in a row are one thing
+    you were saying, and get one answer, not three."""
+    provider = StubProvider(["got it"])
+    with build(store, persona, provider) as runtime:
+        runtime.ingest("hey")
+        runtime.ingest("so the thing happened today")
+        runtime.ingest("and I still don't know what to do about it")
+        assert list(runtime.reply()) == ["got it"]
+
+    assert spoken(provider.calls[-1]) == [
+        "hey",
+        "so the thing happened today",
+        "and I still don't know what to do about it",
+    ]
+
+
+def test_unanswered_is_everything_since_she_last_spoke(store, persona):
+    with build(store, persona, StubProvider(["ok"])) as runtime:
+        runtime.ingest("one")
+        runtime.ingest("two")
+        assert [t.content for t in runtime.unanswered()] == ["one", "two"]
+
+        list(runtime.reply())
+        assert runtime.unanswered() == []
+
+        runtime.ingest("three")
+        assert [t.content for t in runtime.unanswered()] == ["three"]
+
+
+def test_replying_with_nothing_pending_says_nothing(store, persona):
+    provider = StubProvider(["ok"])
+    with build(store, persona, provider) as runtime:
+        assert list(runtime.reply()) == []
+    assert provider.calls == []
+
+
+def test_the_store_takes_writes_from_more_than_one_thread(tmp_path):
+    """She answers on a different thread from the one reading you in, so both
+    have to be able to write."""
+    import threading
+
+    store = Store(tmp_path / "hearth.db")
+    session_id = store.open_session("local", "cli")
+    errors: list[Exception] = []
+
+    def write(tag: str) -> None:
+        try:
+            for index in range(25):
+                store.append_turn(session_id, "user", f"{tag}{index}")
+        except Exception as exc:  # noqa: BLE001 - reported below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write, args=(t,)) for t in ("a", "b", "c")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert store.stats()["turns"] == 75
+    store.close()
+
+
+def test_you_can_keep_talking_while_she_is_composing(store, persona):
+    """The whole point of the split between ingest and reply. If sending a
+    message blocked until she answered, there would be no way to say two things
+    in a row, which is most of what talking to someone is."""
+    import threading
+    import time as _time
+
+    class SlowProvider(StubProvider):
+        def generate(self, messages, *, temperature=None):
+            _time.sleep(0.4)
+            return super().generate(messages, temperature=temperature)
+
+    provider = SlowProvider(["thinking about it"])
+    with build(store, persona, provider) as runtime:
+        runtime.ingest("here is the first thing")
+
+        said: list[str] = []
+        thread = threading.Thread(target=lambda: said.extend(runtime.reply()))
+        thread.start()
+
+        _time.sleep(0.1)  # she is mid-call
+        started = _time.monotonic()
+        runtime.ingest("and another thing")
+        assert _time.monotonic() - started < 0.2, "sending blocked on her reply"
+
+        thread.join(timeout=5)
+        assert said == ["thinking about it"]
+        # What arrived mid-reply is still owed an answer.
+        assert [t.content for t in runtime.unanswered()] == ["and another thing"]

@@ -50,6 +50,7 @@ class Config:
     temperature: float
     context_turns: int
     request_timeout: float
+    settle_seconds: float
 
     @classmethod
     def from_env(cls, *, load_dotenv: bool = True) -> "Config":
@@ -70,4 +71,7 @@ class Config:
             # so this is a hard window rather than a budget.
             context_turns=int(_get("CONTEXT_TURNS", "40")),
             request_timeout=float(_get("REQUEST_TIMEOUT", "60")),
+            # How long she waits after you stop typing before answering, so that
+            # sending three lines in a row gets one reply rather than three.
+            settle_seconds=float(_get("SETTLE_SECONDS", "2.0")),
         )
