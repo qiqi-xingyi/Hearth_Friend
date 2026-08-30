@@ -21,6 +21,12 @@ def build(store, persona, provider, **kwargs) -> Runtime:
     return Runtime(store, provider, persona, user_id="local", channel="cli", **kwargs)
 
 
+def spoken(messages) -> list[str]:
+    """Just the conversation. The system blocks around it are asserted
+    separately, so these tests do not break every time one is added."""
+    return [m["content"] for m in messages if m["role"] != "system"]
+
+
 def test_reply_is_streamed_and_both_turns_persisted(store, persona):
     runtime = build(store, persona, StubProvider(["he", "llo"]))
     with runtime:
@@ -80,7 +86,7 @@ def test_context_is_persona_plus_history(store, persona):
     messages = provider.calls[-1]
     assert messages[0]["role"] == "system"
     assert persona.name in messages[0]["content"]
-    assert [m["content"] for m in messages[1:]] == ["first", "ok", "second"]
+    assert spoken(messages) == ["first", "ok", "second"]
 
 
 def test_conversation_resumes_after_restart(tmp_path, persona):
@@ -98,7 +104,7 @@ def test_conversation_resumes_after_restart(tmp_path, persona):
         list(runtime.respond("do you remember"))
     second_store.close()
 
-    assert [m["content"] for m in provider.calls[-1][1:]] == [
+    assert spoken(provider.calls[-1]) == [
         "I have an interview next week",
         "noted",
         "do you remember",
@@ -112,9 +118,9 @@ def test_context_window_is_respected(store, persona):
         for index in range(4):
             list(runtime.respond(f"m{index}"))
 
-    history = provider.calls[-1][1:]
+    history = spoken(provider.calls[-1])
     assert len(history) == 3
-    assert history[-1]["content"] == "m3"
+    assert history[-1] == "m3"
 
 
 # --- Chinese, which is what this is actually used in ------------------------
@@ -141,6 +147,49 @@ def test_chinese_context_and_persona_reach_the_model(store, chinese_persona):
         list(runtime.respond("在吗"))
         list(runtime.respond("还记得吗"))
 
-    system, *history = provider.calls[-1]
-    assert "二十六岁，住在杭州" in system["content"]
-    assert [m["content"] for m in history] == ["在吗", "嗯", "还记得吗"]
+    messages = provider.calls[-1]
+    assert "二十六岁，住在杭州" in messages[0]["content"]
+    assert spoken(messages) == ["在吗", "嗯", "还记得吗"]
+
+
+# --- her interior -----------------------------------------------------------
+
+
+def test_how_she_is_goes_last_not_into_the_system_prompt(store, persona):
+    """Placed after the history so the cacheable prefix stays intact, and so a
+    persona stated only at the top does not fade over a long conversation."""
+    provider = StubProvider(["ok"])
+    with build(store, persona, provider) as runtime:
+        list(runtime.respond("hello"))
+
+    messages = provider.calls[-1]
+    assert messages[-1]["role"] == "system"
+    assert "你此刻的状态" in messages[-1]["content"]
+    assert "你此刻的状态" not in messages[0]["content"]
+
+
+def test_state_persists_across_a_restart(tmp_path, persona):
+    path = tmp_path / "hearth.db"
+    first = Store(path)
+    with build(first, persona, StubProvider(["ok"])) as runtime:
+        list(runtime.respond("hello"))
+        engagement = runtime.current_state().engagement
+    first.close()
+
+    second = Store(path)
+    with build(second, persona, StubProvider(["ok"])) as runtime:
+        # Some decay is expected; what must not happen is starting from nothing.
+        assert runtime.current_state().engagement == pytest.approx(engagement, abs=0.05)
+    second.close()
+
+
+def test_a_flat_mood_and_a_lively_one_produce_different_instructions(store, persona):
+    from hearth_friend.core.prompt import state_note
+    from hearth_friend.core.state import State
+
+    withdrawn = State(engagement=0.05, energy=0.2, mood_valence=-0.6)
+    engaged = State(engagement=0.9, energy=0.9, mood_valence=0.5)
+
+    assert state_note(withdrawn, None, persona) != state_note(engaged, None, persona)
+    assert "没太投入" in state_note(withdrawn, None, persona)
+    assert "真的有兴趣" in state_note(engaged, None, persona)

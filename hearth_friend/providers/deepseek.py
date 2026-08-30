@@ -7,6 +7,7 @@ come along with it.
 
 from __future__ import annotations
 
+import json
 from typing import Iterator, Sequence
 
 from hearth_friend.providers.base import Message, ProviderError
@@ -18,7 +19,7 @@ class DeepSeekProvider:
         api_key: str,
         *,
         base_url: str = "https://api.deepseek.com",
-        model: str = "deepseek-chat",
+        model: str = "deepseek-v4-flash",
         timeout: float = 60.0,
     ):
         if not api_key:
@@ -63,5 +64,22 @@ class DeepSeekProvider:
                 piece = chunk.choices[0].delta.content
                 if piece:
                     yield piece
+        except Exception as exc:
+            raise ProviderError(str(exc)) from exc
+
+    def structured_output(
+        self, messages: Sequence[Message], *, temperature: float | None = None
+    ) -> dict:
+        """JSON mode. Used for the cheap reads, never for anything she says."""
+        try:
+            response = self._client.chat.completions.create(
+                model=self.model_id,
+                messages=list(messages),
+                temperature=temperature,
+                response_format={"type": "json_object"},
+            )
+            return json.loads(response.choices[0].message.content or "{}")
+        except json.JSONDecodeError as exc:
+            raise ProviderError(f"provider returned invalid JSON: {exc}") from exc
         except Exception as exc:
             raise ProviderError(str(exc)) from exc

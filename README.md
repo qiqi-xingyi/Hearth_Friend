@@ -45,7 +45,7 @@ hearth chat
 ```
 
 ```
-Xiaoman · deepseek-chat · 0 turns so far   (/exit to leave)
+Xiaoman · deepseek-v4-flash · 0 turns so far   (/exit to leave)
 >
 ```
 
@@ -56,7 +56,7 @@ In-chat commands: `/exit`, `/quit`, `/status`.
 ```
 database  data/hearth.db (schema v1)
 persona   persona/example.yaml (Xiaoman)
-provider  deepseek / deepseek-chat
+provider  deepseek / deepseek-v4-flash
 sessions  1
 turns     26
 ```
@@ -95,7 +95,7 @@ environment variables always win over the file.
 |---|---|---|
 | `HEARTH_API_KEY` | — | required |
 | `HEARTH_BASE_URL` | `https://api.deepseek.com` | any OpenAI-compatible endpoint |
-| `HEARTH_MODEL` | `deepseek-chat` | |
+| `HEARTH_MODEL` | `deepseek-v4-flash` | |
 | `HEARTH_PROVIDER` | `deepseek` | |
 | `HEARTH_PERSONA` | `persona/example.yaml` | |
 | `HEARTH_DB_PATH` | `data/hearth.db` | |

@@ -159,6 +159,55 @@ class Store:
         ).fetchall()
         return [Turn(**dict(row)) for row in reversed(rows)]
 
+    # ----------------------------------------------------------- her interior
+
+    def load_state(self, user_id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT mood_valence, mood_arousal, energy, engagement, focus, updated_at"
+            "  FROM state WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def save_state(self, user_id: str, state: dict) -> None:
+        self.conn.execute(
+            "INSERT INTO state (user_id, mood_valence, mood_arousal, energy,"
+            "                   engagement, focus, updated_at)"
+            " VALUES (:user_id, :mood_valence, :mood_arousal, :energy,"
+            "         :engagement, :focus, :updated_at)"
+            " ON CONFLICT(user_id) DO UPDATE SET"
+            "   mood_valence = excluded.mood_valence,"
+            "   mood_arousal = excluded.mood_arousal,"
+            "   energy       = excluded.energy,"
+            "   engagement   = excluded.engagement,"
+            "   focus        = excluded.focus,"
+            "   updated_at   = excluded.updated_at",
+            {"user_id": user_id, **state, "updated_at": utcnow()},
+        )
+
+    def save_perception(self, turn_id: int, perception) -> int:
+        """Kept as the evidence behind a state change, not as authority.
+
+        Derived from `turn`, so it can be recomputed; recorded anyway, because
+        without it a state change has no explanation.
+        """
+        cur = self.conn.execute(
+            "INSERT INTO perception (turn_id, user_emotion, emotion_intensity,"
+            "                        wants, salience, about_her, raw_json, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                turn_id,
+                perception.emotion,
+                perception.emotion_intensity,
+                perception.wants,
+                perception.salience,
+                int(perception.about_her),
+                perception.raw or None,
+                utcnow(),
+            ),
+        )
+        return int(cur.lastrowid)
+
     # ----------------------------------------------------------------- misc
 
     def stats(self, user_id: str | None = None) -> dict[str, Any]:

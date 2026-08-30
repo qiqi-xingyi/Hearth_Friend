@@ -32,3 +32,7 @@ class ModelProvider(Protocol):
     def stream(
         self, messages: Sequence[Message], *, temperature: float | None = None
     ) -> Iterator[str]: ...
+
+    def structured_output(
+        self, messages: Sequence[Message], *, temperature: float | None = None
+    ) -> dict: ...

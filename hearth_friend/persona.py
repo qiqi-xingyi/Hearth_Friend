@@ -19,12 +19,48 @@ class PersonaError(ValueError):
 
 
 @dataclass(frozen=True)
+class Traits:
+    """Personality as parameters, not adjectives.
+
+    Every field here is read by code and changes a number. A trait that only
+    gets described in the prompt is not a trait; it is a word in a file, and the
+    model will render it as tone and then ignore it.
+    """
+
+    # Where her mood settles when nothing is happening.  -1 .. +1
+    baseline_mood: float = 0.0
+    # How far someone else's feeling carries into hers.  0 .. 1
+    warmth: float = 0.5
+    # How fast she moves at all. Low means steady, high means she takes it in.
+    volatility: float = 0.3
+    # How much a salient subject pulls her in, versus leaving her flat.
+    curiosity: float = 0.5
+    # How much of her own condition shows in what she says.
+    expressiveness: float = 0.5
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> "Traits":
+        data = data or {}
+        known = {f: data[f] for f in cls.__dataclass_fields__ if f in data}
+        try:
+            traits = cls(**{k: float(v) for k, v in known.items()})
+        except (TypeError, ValueError) as exc:
+            raise PersonaError(f"traits must be numbers: {exc}") from exc
+        for field, value in vars(traits).items():
+            low = -1.0 if field == "baseline_mood" else 0.0
+            if not low <= value <= 1.0:
+                raise PersonaError(f"trait {field}={value} is outside [{low}, 1.0]")
+        return traits
+
+
+@dataclass(frozen=True)
 class Persona:
     name: str
     core: str
     language_register: str = ""
     self_disclosure: str = ""
     boundaries: tuple[str, ...] = field(default_factory=tuple)
+    traits: Traits = field(default_factory=Traits)
     source_path: Path | None = None
 
     @classmethod
@@ -58,5 +94,6 @@ class Persona:
             language_register=str(data.get("language_register") or "").strip(),
             self_disclosure=str(data.get("self_disclosure") or "").strip(),
             boundaries=tuple(str(b).strip() for b in boundaries if str(b).strip()),
+            traits=Traits.from_dict(data.get("traits")),
             source_path=path,
         )

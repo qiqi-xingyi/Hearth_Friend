@@ -64,7 +64,7 @@ class Config:
             provider=_get("PROVIDER", "deepseek"),
             api_key=_get("API_KEY", ""),
             base_url=_get("BASE_URL", "https://api.deepseek.com"),
-            model=_get("MODEL", "deepseek-chat"),
+            model=_get("MODEL", "deepseek-v4-flash"),
             temperature=float(_get("TEMPERATURE", "1.0")),
             # How many past turns are replayed as context. M0 has no summarisation,
             # so this is a hard window rather than a budget.
