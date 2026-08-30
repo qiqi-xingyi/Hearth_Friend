@@ -1,0 +1,197 @@
+"""SQLite store.
+
+The `turn` table is the source of truth. Everything else in this project is
+derived from it and may be dropped and rebuilt, which is what makes the rest of
+the design safe to change while it is being built.
+
+Migrations run automatically on open. They exist from the first commit precisely
+because the schema is expected to move a lot: by the time it does there is real
+conversation in the database, and a design change must not cost data.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+
+
+def utcnow() -> str:
+    """Timestamps are ISO-8601 UTC text: portable, sortable, exports cleanly."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass(frozen=True)
+class Turn:
+    id: int
+    session_id: int
+    role: str
+    content: str
+    created_at: str
+
+
+class AppendOnlyViolation(RuntimeError):
+    """Raised when something tries to rewrite the turn log."""
+
+
+class Store:
+    def __init__(self, path: Path | str):
+        self.path = Path(path)
+        if self.path.parent != Path(""):
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        # isolation_level=None puts the driver in autocommit mode so that
+        # transactions are managed explicitly here rather than implicitly.
+        self.conn = sqlite3.connect(str(self.path), isolation_level=None)
+        self.conn.row_factory = sqlite3.Row
+        self._configure()
+        self.applied_migrations = self.migrate()
+
+    def _configure(self) -> None:
+        # WAL from the start: a scheduler will share this file soon enough, and
+        # switching later means a moment where the database is not readable.
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA foreign_keys=ON")
+        self.conn.execute("PRAGMA busy_timeout=5000")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+
+    # ---------------------------------------------------------------- schema
+
+    def migrate(self) -> list[int]:
+        """Apply pending migrations in filename order. Returns versions applied."""
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_version ("
+            "  version INTEGER PRIMARY KEY,"
+            "  applied_at TEXT NOT NULL)"
+        )
+        applied = {
+            row["version"] for row in self.conn.execute("SELECT version FROM schema_version")
+        }
+        newly: list[int] = []
+        for sql_path in sorted(MIGRATIONS_DIR.glob("[0-9]*.sql")):
+            version = int(sql_path.name.split("_", 1)[0])
+            if version in applied:
+                continue
+            body = sql_path.read_text(encoding="utf-8")
+            # The migration and its version record commit together. executescript
+            # commits any pending transaction first, so the BEGIN belongs inside
+            # the script rather than around the call.
+            script = (
+                "BEGIN;\n"
+                f"{body}\n"
+                "INSERT INTO schema_version (version, applied_at) "
+                f"VALUES ({version}, '{utcnow()}');\n"
+                "COMMIT;\n"
+            )
+            try:
+                self.conn.executescript(script)
+            except Exception:
+                try:
+                    self.conn.execute("ROLLBACK")
+                except sqlite3.OperationalError:
+                    pass
+                raise
+            newly.append(version)
+        return newly
+
+    @property
+    def schema_version(self) -> int:
+        row = self.conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
+        return row["v"] or 0
+
+    # -------------------------------------------------------------- sessions
+
+    def open_session(self, user_id: str, channel: str) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO session (user_id, channel, started_at) VALUES (?, ?, ?)",
+            (user_id, channel, utcnow()),
+        )
+        return int(cur.lastrowid)
+
+    def close_session(self, session_id: int) -> None:
+        self.conn.execute(
+            "UPDATE session SET ended_at = ? WHERE id = ? AND ended_at IS NULL",
+            (utcnow(), session_id),
+        )
+
+    # ----------------------------------------------------------------- turns
+
+    def append_turn(
+        self,
+        session_id: int,
+        role: str,
+        content: str,
+        *,
+        channel_msg_id: str | None = None,
+        meta: dict[str, Any] | None = None,
+    ) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO turn (session_id, role, content, created_at, channel_msg_id, meta_json)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                session_id,
+                role,
+                content,
+                utcnow(),
+                channel_msg_id,
+                json.dumps(meta, ensure_ascii=False) if meta else None,
+            ),
+        )
+        return int(cur.lastrowid)
+
+    def recent_turns(self, user_id: str, limit: int) -> list[Turn]:
+        """The most recent turns for a user, oldest first.
+
+        Context deliberately spans sessions: a session is one attach to the CLI,
+        not one conversation. M0 takes a fixed window; summarising a longer
+        history is a later problem.
+        """
+        rows = self.conn.execute(
+            "SELECT t.id, t.session_id, t.role, t.content, t.created_at"
+            "  FROM turn t JOIN session s ON s.id = t.session_id"
+            " WHERE s.user_id = ? AND t.role IN ('user', 'assistant')"
+            " ORDER BY t.id DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+        return [Turn(**dict(row)) for row in reversed(rows)]
+
+    # ----------------------------------------------------------------- misc
+
+    def stats(self, user_id: str | None = None) -> dict[str, Any]:
+        if user_id is None:
+            sessions = self.conn.execute("SELECT COUNT(*) AS n FROM session").fetchone()["n"]
+            turns = self.conn.execute("SELECT COUNT(*) AS n FROM turn").fetchone()["n"]
+            first = self.conn.execute("SELECT MIN(created_at) AS t FROM turn").fetchone()["t"]
+        else:
+            sessions = self.conn.execute(
+                "SELECT COUNT(*) AS n FROM session WHERE user_id = ?", (user_id,)
+            ).fetchone()["n"]
+            turns = self.conn.execute(
+                "SELECT COUNT(*) AS n FROM turn t JOIN session s ON s.id = t.session_id"
+                " WHERE s.user_id = ?",
+                (user_id,),
+            ).fetchone()["n"]
+            first = self.conn.execute(
+                "SELECT MIN(t.created_at) AS t FROM turn t JOIN session s ON s.id = t.session_id"
+                " WHERE s.user_id = ?",
+                (user_id,),
+            ).fetchone()["t"]
+        return {
+            "schema_version": self.schema_version,
+            "sessions": sessions,
+            "turns": turns,
+            "first_turn_at": first,
+        }
+
+    def close(self) -> None:
+        self.conn.close()
+
+    def __enter__(self) -> "Store":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()

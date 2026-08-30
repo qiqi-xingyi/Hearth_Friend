@@ -1,0 +1,64 @@
+# ──────────────────────────────────────────────────────────────
+# Internal design notes — kept local, never pushed
+# ──────────────────────────────────────────────────────────────
+/docs/vision.md
+/docs/design.md
+/CLAUDE.md
+/docs/internal/
+/private/
+/notes/
+*.local.md
+*.zh.md
+
+# ──────────────────────────────────────────────────────────────
+# Her data — private conversations, memories, personality state.
+# Never commit any of this.
+# ──────────────────────────────────────────────────────────────
+/data/
+**/data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+/exports/
+/backups/
+
+# ──────────────────────────────────────────────────────────────
+# Secrets and local configuration
+# ──────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+config.local.*
+*.local.toml
+*.local.yaml
+*.key
+*.pem
+
+# ──────────────────────────────────────────────────────────────
+# Python
+# ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# ──────────────────────────────────────────────────────────────
+# Editors and OS
+# ──────────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hearth-friend"
+version = "0.0.1"
+description = "A runtime for a companion that persists"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.30",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+hearth = "hearth_friend.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["hearth_friend"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

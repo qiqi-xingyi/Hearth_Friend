@@ -1,0 +1,17 @@
+# Conda environment for this project.
+#
+#   conda env create -f environment.yml
+#   conda activate hearth
+#
+# Dependencies are declared in pyproject.toml, not here. This file only pins the
+# interpreter and installs the project into the environment, so there stays one
+# source of truth for what the package needs.
+
+name: hearth
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - -e .[dev]
