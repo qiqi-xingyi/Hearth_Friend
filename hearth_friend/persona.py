@@ -71,6 +71,10 @@ class MessageStyle:
     chars_per_message: int = 30
     # Seconds between them, as if she were typing.
     pause_seconds: float = 1.2
+    # How much punctuation survives. Nobody ends a chat message with a full
+    # stop; writing one is the difference between a message and a paragraph.
+    # 0 drops sentence-final marks and most commas, 1 writes properly.
+    punctuation: float = 0.25
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "MessageStyle":
@@ -80,6 +84,7 @@ class MessageStyle:
                 messages_per_reply=float(data.get("messages_per_reply", 2.0)),
                 chars_per_message=int(data.get("chars_per_message", 30)),
                 pause_seconds=float(data.get("pause_seconds", 1.2)),
+                punctuation=float(data.get("punctuation", 0.25)),
             )
         except (TypeError, ValueError) as exc:
             raise PersonaError(f"message_style must be numbers: {exc}") from exc
@@ -89,6 +94,8 @@ class MessageStyle:
             raise PersonaError("chars_per_message must be between 4 and 400")
         if not 0.0 <= style.pause_seconds <= 10.0:
             raise PersonaError("pause_seconds must be between 0 and 10")
+        if not 0.0 <= style.punctuation <= 1.0:
+            raise PersonaError("punctuation must be between 0 and 1")
         return style
 
 

@@ -50,9 +50,33 @@ def test_a_message_arrives_as_a_string_or_as_segments():
     ]}) == "分段的文本"
 
 
-def test_what_she_cannot_see_is_skipped_rather_than_described():
-    """Saying "[image]" would be telling him she saw something she did not."""
-    assert extract_text({"message": [{"type": "image", "data": {"url": "x"}}]}) == ""
+def test_an_emoticon_is_part_of_the_sentence_and_is_read():
+    """「行吧[撇嘴]」 does not mean what 「行吧」 means."""
+    assert extract_text({"message": [
+        {"type": "text", "data": {"text": "行吧"}},
+        {"type": "face", "data": {"id": "1"}},
+    ]}) == "行吧[撇嘴]"
+    assert "[表情]" in extract_text(
+        {"message": [{"type": "face", "data": {"id": "99999"}}]}
+    )
+
+
+def test_a_sticker_carries_its_own_label_and_the_label_is_kept():
+    assert extract_text({"message": [
+        {"type": "image", "data": {"summary": "[开心]", "sub_type": "1"}}
+    ]}) == "[表情包：开心]"
+
+
+def test_a_photograph_is_recorded_as_arriving_and_as_unseen():
+    """Dropping it silently meant he could send a picture and be met with
+    nothing at all, which is worse than being told she cannot see it. Saying
+    what she cannot see is honest; describing it would not be."""
+    read = extract_text({"message": [
+        {"type": "image", "data": {"url": "http://x/1.jpg", "sub_type": "0"}},
+        {"type": "text", "data": {"text": " 你看这个"}},
+    ]})
+    assert "看不到内容" in read
+    assert "你看这个" in read
 
 
 def test_only_his_messages_are_read_at_all():

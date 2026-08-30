@@ -28,7 +28,11 @@ _FRAMEWORK_RULES = """【底层规则】
 - 不要复述对方刚说过的话再回答，直接接着说。
 - 不确定或不记得的事就说不确定，不要为了接得顺而编细节。
 - 不要说出自己的心情或状态。让它体现在你说多少、怎么说上，而不是报出来。
-- 不要主动收尾。除非对方明确说要走，否则不要说"早点休息""我去睡了"这类结束语。"""
+- 不要主动收尾。除非对方明确说要走，否则不要说"早点休息""我去睡了"这类结束语。
+- 消息里 [微笑] [笑哭] 这种是他发的表情，[表情包：xx] 是表情包，都算他说话的一部分，照读。
+- 但 [他发了一张图片，你看不到内容] 就是字面意思：你看不到。
+  可以直接说看不了、或者问他是什么，绝不要假装看见了。
+- 你自己也可以用 emoji，但别每句都带。"""
 
 
 def system_prompt(persona: Persona) -> str:
@@ -52,11 +56,40 @@ def system_prompt(persona: Persona) -> str:
         f"{style.messages_per_reply:.0f} 条左右，每条大约 {style.chars_per_message} 字以内，"
         "一行一条。\n"
         "这几条全都是你说的话。不要写对方的回复，不要自问自答，"
-        "不要写成一段两个人的对话。"
+        "不要写成一段两个人的对话。\n"
+        + _punctuation_note(style.punctuation)
     )
 
     blocks.append(_FRAMEWORK_RULES)
     return "\n\n".join(block.strip() for block in blocks if block.strip())
+
+
+def _punctuation_note(level: float) -> str:
+    """How she writes, not how a document is written.
+
+    Nobody ends a message with a full stop. Doing it is most of the difference
+    between something that reads as a message and something that reads as a
+    paragraph delivered in a chat window.
+    """
+    if level <= 0.35:
+        return (
+            "写成聊天的样子，不是写文章：句尾不加句号，逗号能省就省，用空格断一下就行。\n"
+            "口语一点，可以有语气词、可以不完整。问号和感叹号该用还是用。"
+        )
+    if level <= 0.7:
+        return "标点随意些，句尾的句号可以不打。"
+    return "标点正常。"
+
+
+def strip_trailing_stop(text: str, level: float) -> str:
+    """Take the full stop off the end, because people do.
+
+    Done here rather than asked for: the model complies for a line or two and
+    then reverts, and this is the single most visible tell.
+    """
+    if level > 0.7:
+        return text
+    return re.sub(r"[。．.]+\s*$", "", text.rstrip())
 
 
 def split_messages(text: str, style: "MessageStyle") -> list[str]:
@@ -74,6 +107,9 @@ def split_messages(text: str, style: "MessageStyle") -> list[str]:
     if len(lines) == 1 and len(lines[0]) > style.chars_per_message * 1.6:
         parts = re.findall(r"[^。！？…\n]+[。！？…]*", lines[0])
         lines = [part.strip() for part in parts if part.strip()] or lines
+
+    lines = [strip_trailing_stop(line, style.punctuation) for line in lines]
+    lines = [line for line in lines if line]
 
     cap = max(1, round(style.messages_per_reply * 2))
     if len(lines) > cap:

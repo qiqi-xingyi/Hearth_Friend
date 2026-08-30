@@ -7,6 +7,10 @@
 /docs/internal/
 /private/
 /notes/
+# Your own persona. The examples in persona/ are for anyone reading this; the
+# one you actually talk to is yours, like the database.
+/persona/mine.yaml
+/persona/*.local.yaml
 *.local.md
 *.zh.md
 

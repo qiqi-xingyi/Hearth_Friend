@@ -50,6 +50,7 @@ persona:
     messages_per_reply: 2.5
     chars_per_message: 22
     pause_seconds: 1.4
+    punctuation: 0.25
 
   # Things she must never do, regardless of what the conversation invites.
   boundaries:
