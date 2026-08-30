@@ -59,6 +59,24 @@ rather than one block. Her messages can land while you are still typing.
 
 In-chat commands: `/exit`, `/quit`, `/status`.
 
+## Staying up
+
+A terminal is only open while you are looking at it, which means nothing she
+might say first has anywhere to go. `hearth serve` stays connected instead, over
+QQ:
+
+```bash
+docker compose up -d
+```
+
+That runs two containers — one signs into QQ and speaks OneBot, one is her. Put
+your own QQ number in `HEARTH_QQ_USER_ID`; hers is signed in by NapCat, and
+should be a second account rather than one you use. Messages from anyone else
+are dropped without being read.
+
+She is in `./data` and `./persona`. Those two directories are the whole of her:
+copy them and you have moved her.
+
 `hearth status` shows what is in the database, including what she has been
 meaning to understand and any question the guard would not let out:
 

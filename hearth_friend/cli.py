@@ -90,6 +90,101 @@ def cmd_backup(config: Config, destination: str) -> int:
     return 0
 
 
+def _build(config: Config):
+    """Everything she is, assembled. Shared by every way in, so that talking to
+    her in a terminal and talking to her on a phone reach the same person."""
+    persona = Persona.load(config.persona_path)
+    provider = build_provider(config)
+    store = Store(config.db_path)
+    runtime = Runtime(
+        store,
+        provider,
+        persona,
+        user_id=config.user_id,
+        channel=config.channel,
+        context_turns=config.context_turns,
+        context_chars=config.context_chars,
+        temperature=config.temperature,
+        embedding=build_embedding(config),
+    )
+    return persona, store, runtime
+
+
+def _warm(runtime, note) -> None:
+    """The background work that should not be in front of the first thing said."""
+    if runtime.embedding is not None:
+        try:
+            runtime.embedding.load()
+            vectorised = runtime.catch_up_embeddings()
+            if vectorised:
+                note(f"[took in {vectorised} things]")
+        except Exception as exc:
+            note(f"[no embedding model: {exc}]")
+            runtime.embedding = None
+    for work in (
+        lambda: runtime.store.drop_stale_threads(),
+        lambda: runtime.store.record_outcome(runtime.user_id),
+        lambda: runtime.let_time_pass(),
+        lambda: runtime.generalise(),
+        lambda: runtime.catch_up_extraction(),
+        lambda: runtime.refresh_reading(),
+        lambda: runtime.catch_up_embeddings(),
+    ):
+        try:
+            work()
+        except Exception:
+            pass
+
+
+def cmd_serve(config: Config) -> int:
+    """Stay up, so she can be reached and can reach out.
+
+    A terminal is only open while you are looking at it, which is why nothing
+    she might say first has ever had anywhere to go.
+    """
+    if not config.qq_user_id:
+        print("error: set HEARTH_QQ_USER_ID to your own QQ number", file=sys.stderr)
+        return 1
+
+    from hearth_friend.adapters.qq import OneBotChannel, QQAdapter
+    from hearth_friend.core.conversation import Conversation
+
+    try:
+        persona, store, runtime = _build(config)
+    except (PersonaError, ProviderError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    def note(text: str) -> None:
+        print(text, flush=True)
+
+    channel = OneBotChannel(lambda payload: None, config.qq_user_id)
+    conversation = Conversation(
+        runtime,
+        channel,
+        settle_seconds=config.settle_seconds,
+        pause_seconds=persona.message_style.pause_seconds,
+        on_error=note,
+    )
+    adapter = QQAdapter(conversation, config.qq_ws_url, config.qq_user_id, config.qq_token)
+
+    note(f"{persona.name} · {config.model} · {store.stats(config.user_id)['turns']} turns")
+    note(f"connecting to {config.qq_ws_url}")
+    _warm(runtime, note)
+
+    with runtime:
+        conversation.start()
+        try:
+            adapter.run()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            adapter.stop()
+            conversation.stop()
+    store.close()
+    return 0
+
+
 def cmd_chat(config: Config) -> int:
     """Talk to her.
 
@@ -266,6 +361,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("chat", help="talk to her (default)")
     sub.add_parser("status", help="show what is in the database")
+    sub.add_parser("serve", help="stay up on QQ, so she can be reached and reach out")
     backup = sub.add_parser("backup", help="write a complete copy to a file")
     backup.add_argument("destination", help="path to write the copy to")
     parser.set_defaults(command="chat")
@@ -277,6 +373,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_status(config)
     if args.command == "backup":
         return cmd_backup(config, args.destination)
+    if args.command == "serve":
+        return cmd_serve(config)
     return cmd_chat(config)
 
 

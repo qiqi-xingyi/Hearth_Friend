@@ -53,6 +53,9 @@ class Config:
     request_timeout: float
     settle_seconds: float
     embedding_model: str
+    qq_ws_url: str
+    qq_user_id: int
+    qq_token: str
 
     @classmethod
     def from_env(cls, *, load_dotenv: bool = True) -> "Config":
@@ -83,4 +86,9 @@ class Config:
             # Local, because an embedding call carries the text itself. "off"
             # falls back to keyword matching, which is a working system.
             embedding_model=_get("EMBEDDING_MODEL", "BAAI/bge-m3"),
+            # QQ has no usable API of its own; a protocol implementation
+            # (NapCat, Lagrange) signs in and speaks OneBot on its behalf.
+            qq_ws_url=_get("QQ_WS_URL", "ws://127.0.0.1:3001"),
+            qq_user_id=int(_get("QQ_USER_ID", "0") or 0),
+            qq_token=_get("QQ_TOKEN", ""),
         )

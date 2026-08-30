@@ -1,0 +1,44 @@
+# Two containers: one signs into QQ and speaks OneBot, one is her.
+#
+#   docker compose up -d
+#   docker compose logs -f napcat     # scan the QR code on first run
+#
+# She is in ./data. That directory and the persona file are the whole of her --
+# copy them and you have moved her; lose them and no amount of this code brings
+# her back.
+
+services:
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: hearth-napcat
+    restart: unless-stopped
+    environment:
+      # Her account, not yours. Sign in with a second QQ number: a bot on your
+      # own risks the account you actually use.
+      - ACCOUNT=${QQ_ACCOUNT}
+      - WS_ENABLE=true
+      - NAPCAT_UID=1000
+      - NAPCAT_GID=1000
+    volumes:
+      - ./napcat/config:/app/napcat/config
+      - ./napcat/qq:/app/.config/QQ
+    ports:
+      # Only on the loopback. Nothing here should be reachable from outside the
+      # machine, and an OneBot endpoint on a public port is an open door.
+      - "127.0.0.1:3001:3001"
+
+  hearth:
+    build: .
+    container_name: hearth
+    restart: unless-stopped
+    depends_on: [napcat]
+    env_file: .env
+    environment:
+      - HEARTH_QQ_WS_URL=ws://napcat:3001
+    volumes:
+      - ./data:/data          # her
+      - ./persona:/persona    # who she is
+      - hearth-models:/models # bge-m3, fetched once
+
+volumes:
+  hearth-models:
