@@ -43,3 +43,13 @@ def test_chinese_persona_reaches_the_prompt(chinese_persona):
     assert "二十六岁，住在杭州" in prompt
     assert "短句，标点随意。" in prompt
     assert "不编造经历" in prompt
+
+
+def test_she_is_told_the_messages_are_all_hers():
+    """She was writing both sides: asking a question and then answering it as
+    if the other person had replied, and in one case agreeing to her own
+    proposal. Splitting a reply into lines reads as "write a chat log", and a
+    chat log has two people in it."""
+    prompt = system_prompt(Persona.load("persona/example.yaml"))
+    assert "不要写对方的回复" in prompt
+    assert "不要自问自答" in prompt

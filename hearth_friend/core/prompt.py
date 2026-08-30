@@ -46,9 +46,11 @@ def system_prompt(persona: Persona) -> str:
     style = persona.message_style
     blocks.append(
         "【怎么发消息】\n"
-        f"把要说的拆成 {style.messages_per_reply:.0f} 条左右分别发出，"
-        f"每条大约 {style.chars_per_message} 字以内。\n"
-        "用换行分隔，一行就是一条消息。不要写成一整段。"
+        f"你可以连着发几条消息，像平时发微信那样一句一条。通常 "
+        f"{style.messages_per_reply:.0f} 条左右，每条大约 {style.chars_per_message} 字以内，"
+        "一行一条。\n"
+        "这几条全都是你说的话。不要写对方的回复，不要自问自答，"
+        "不要写成一段两个人的对话。"
     )
 
     blocks.append(_FRAMEWORK_RULES)
