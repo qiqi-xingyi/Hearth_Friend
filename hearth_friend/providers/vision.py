@@ -21,13 +21,18 @@ from hearth_friend.providers.base import ProviderError
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 FETCH_TIMEOUT = 20.0
 
-_INSTRUCTION = """用一句中文说这张图里是什么，像跟朋友转述一样。
+_INSTRUCTION = """用中文说这张图里是什么，像跟朋友转述一样。
 
-- 二十到四十字，说清楚就行
+长度跟着图里的东西走，不要固定：
+- 一张随手拍、一个表情包，一句话就够
+- 信息密的（截图、白板、文档、图表、一堆字）就写长一点，把要紧的都说出来，
+  该读的字要读出来、该抄的数要抄下来——**这句话是以后唯一留下的东西，
+  这里没写的就等于没看过**
+- 最多两百字
+
 - 是照片就说看到了什么；是截图就说截的是什么；是表情包就说画的是什么、什么语气
-- 有文字的话把关键的读出来
 - 不要评价、不要抒情、不要说"这张图片展示了"
-只输出这一句话。"""
+只输出转述本身。"""
 
 
 def fetch_image(url: str, *, timeout: float = FETCH_TIMEOUT) -> tuple[bytes, str] | None:
@@ -76,4 +81,23 @@ def describe(provider, url: str, *, model: str) -> str | None:
         # here hid a missing dependency twice already.
         return None
     seen = (seen or "").strip().replace("\n", " ")
-    return seen[:120] or None
+    return _trim(seen) or None
+
+
+# Long enough to hold what a dense image contains -- a dashboard's numbers, a
+# whiteboard's working. What is not in here is gone: this is the only trace the
+# picture leaves, and every later turn reads it, so it cannot be unbounded
+# either.
+MAX_DESCRIPTION_CHARS = 500
+
+
+def _trim(text: str) -> str:
+    """Cut at the end of a sentence, not in the middle of a word."""
+    if len(text) <= MAX_DESCRIPTION_CHARS:
+        return text
+    window = text[:MAX_DESCRIPTION_CHARS]
+    for mark in ("。", "；", "，", " "):
+        cut = window.rfind(mark)
+        if cut > MAX_DESCRIPTION_CHARS * 0.6:
+            return window[: cut + 1].rstrip("，； ")
+    return window

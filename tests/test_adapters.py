@@ -211,3 +211,16 @@ def test_an_image_with_no_address_is_not_fetched():
     assert "看不到内容" in read_message(
         {"message": [{"type": "image", "data": {"sub_type": "0"}}]}, describe=explode
     )
+
+
+def test_a_dense_picture_is_not_cut_off_mid_word():
+    """The description is the only trace the picture leaves -- every later turn
+    reads it and the image itself is gone -- so it is bounded, but the bound
+    lands at the end of a sentence."""
+    from hearth_friend.providers.vision import MAX_DESCRIPTION_CHARS, _trim
+
+    long = "这是一张看板截图。" + "左上角是加载时间图表，中位数2.05秒。" * 40
+    trimmed = _trim(long)
+    assert len(trimmed) <= MAX_DESCRIPTION_CHARS
+    assert trimmed.endswith(("。", "秒"))
+    assert _trim("一张风景照") == "一张风景照"
